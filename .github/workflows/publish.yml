@@ -1,0 +1,26 @@
+name: Publish crate
+
+on:
+  push:
+    tags:        
+        - '[0-9]+.[0-9]+.[0-9]+'
+
+env:
+  CARGO_TERM_COLOR: always
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          override: true
+      - run: cargo publish --token ${CRATESIO_TOKEN}
+        env:
+          CRATESIO_TOKEN: ${{ secrets.CRATESIO_TOKEN }}
