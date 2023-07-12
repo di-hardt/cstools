@@ -16,6 +16,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
+      - name: Install Custom C Dependencies
+        run: sudo apt install -y libhdf5-serial-dev
       - uses: actions-rs/toolchain@v1
         with:
           profile: minimal
