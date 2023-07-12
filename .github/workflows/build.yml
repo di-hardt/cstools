@@ -1,0 +1,30 @@
+name: Rust
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+
+env:
+  CARGO_TERM_COLOR: always
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v3
+      - name: Install Custom C Dependencies
+        run: sudo apt install -y libhdf5-serial-dev
+      - uses: actions-rs/cargo@v1
+        with:
+          command: build
+          args: --release --verbose
+      - uses: actions-rs/cargo@v1
+        with:
+          command: test
+          args: --release --verbose
