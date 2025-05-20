@@ -8,10 +8,17 @@ use murmur3::murmur3_x64_128 as murmur3hash;
 /// BloomFilter struct for saving strings.
 ///
 pub struct BloomFilter {
-    fp_prob: f64,             // False positive probability
-    size: u128, // Size of the bloom filter. Allowed us a max of u64 but we store it as u128 so it only converted once
-    hash_count: u32, // Number of hash functions
-    bitvec: BitBox<u8, Msb0>, // Bit vector
+    /// False positive probability
+    fp_prob: f64,
+
+    /// Size of the bloom filter. Allowed us a max of u64 but we store it as u128 so it only converted once
+    size: u128,
+
+    // Number of hash functions to apply
+    hash_count: u32,
+
+    // Bit vector
+    bitvec: BitBox<u8, Msb0>,
 }
 
 impl BloomFilter {
