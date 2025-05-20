@@ -1,13 +1,8 @@
-// std imports
-use core::num::ParseIntError;
 use std::f64::consts::E;
 use std::io::Cursor;
-use std::path::PathBuf;
 
-// 3rd party imports
 use anyhow::{bail, Result};
 use bitvec::prelude::*;
-use hdf5::{types::VarLenAscii, File as HDF5File};
 use murmur3::murmur3_x64_128 as murmur3hash;
 
 /// BloomFilter struct for saving strings.
@@ -206,14 +201,15 @@ impl BloomFilter {
     /// # Arguments
     /// * `path` - Path to hdf5 file
     ///
-    pub fn load(path: &PathBuf) -> Result<Self> {
-        let file = HDF5File::open(path)?;
+    #[cfg(feature = "hdf5")]
+    pub fn load_hdf5(path: &std::path::PathBuf) -> Result<Self> {
+        let file = hdf5::File::open(path)?;
         let size = file.dataset("size")?.read_scalar::<u64>()?;
         let hash_count = file.dataset("hash_count")?.read_scalar::<u32>()?;
         let fp_prob = file.dataset("fp_prob")?.read_scalar::<f64>()?;
         let bytes = match Self::decode_hex(
             file.dataset("bit_array")?
-                .read_scalar::<VarLenAscii>()?
+                .read_scalar::<hdf5::types::VarLenAscii>()?
                 .as_str(),
         ) {
             Ok(bytes) => bytes,
@@ -232,8 +228,9 @@ impl BloomFilter {
     /// # Arguments
     /// * `path` - Path to hdf5 file
     ///
-    pub fn save(&self, path: &PathBuf) -> Result<()> {
-        let file = HDF5File::create(path)?;
+    #[cfg(feature = "hdf5")]
+    pub fn save_hdf5(&self, path: &std::path::PathBuf) -> Result<()> {
+        let file = hdf5::File::create(path)?;
         file.new_dataset::<u64>()
             .create("size")?
             .write_scalar(&(self.size as u64))?;
@@ -249,9 +246,9 @@ impl BloomFilter {
             .map(|b| format!("{:02X}", b))
             .collect::<String>();
         // Save hex string to hdf5 file
-        file.new_dataset::<VarLenAscii>()
+        file.new_dataset::<hdf5::types::VarLenAscii>()
             .create("bit_array")?
-            .write_scalar(&VarLenAscii::from_ascii(&s_ascii)?)?;
+            .write_scalar(&hdf5::types::VarLenAscii::from_ascii(&s_ascii)?)?;
         Ok(())
     }
 
@@ -260,7 +257,8 @@ impl BloomFilter {
     /// # Arguments
     /// * `s` - Hex string
     ///
-    pub fn decode_hex(s: &str) -> Result<Vec<u8>, ParseIntError> {
+    #[cfg(feature = "hdf5")]
+    pub fn decode_hex(s: &str) -> Result<Vec<u8>, core::num::ParseIntError> {
         (0..s.len())
             .step_by(2)
             .map(|i| u8::from_str_radix(&s[i..i + 2], 16))
@@ -272,6 +270,7 @@ impl BloomFilter {
     /// # Arguments
     /// * `bit_array` - Bit array
     ///
+    #[cfg(feature = "hdf5")]
     pub fn encode_hex(bit_array: &BitBox<u8, Msb0>) -> Result<Vec<u8>> {
         let mut bytes: Vec<u8> = Vec::with_capacity(bit_array.len() / 8);
         for start in (0..bit_array.len()).step_by(8) {
@@ -283,12 +282,9 @@ impl BloomFilter {
 
 #[cfg(test)]
 mod tests {
-    // std imports
-    use std::env::temp_dir;
     use std::fs::read_to_string;
     use std::path::PathBuf;
 
-    // internal imports
     use super::*;
 
     #[test]
@@ -312,6 +308,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "hdf5")]
     #[test]
     fn test_save_and_load() {
         let some_strings: Vec<String> =
@@ -328,14 +325,14 @@ mod tests {
             bloom_filter.add(a_string).unwrap();
         }
 
-        let temp_file = temp_dir().join("bloom_filter.h5");
+        let temp_file = std::env::temp_dir().join("bloom_filter.h5");
         if temp_file.is_file() {
             std::fs::remove_file(&temp_file).unwrap();
         }
 
-        bloom_filter.save(&temp_file).unwrap();
+        bloom_filter.save_hdf5(&temp_file).unwrap();
 
-        let read_bloom_filter = BloomFilter::load(&temp_file).unwrap();
+        let read_bloom_filter = BloomFilter::load_hdf5(&temp_file).unwrap();
 
         assert!(bloom_filter.size == read_bloom_filter.size);
         assert!(bloom_filter.hash_count == read_bloom_filter.hash_count);
