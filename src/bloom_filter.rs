@@ -1,4 +1,3 @@
-///
 // std imports
 use core::num::ParseIntError;
 use std::f64::consts::E;
@@ -41,25 +40,25 @@ impl BloomFilter {
     /// Get false positive probability
     ///
     pub fn get_fp_prob(&self) -> f64 {
-        return self.fp_prob;
+        self.fp_prob
     }
 
     /// Get size of bloom filter
     ///
     pub fn get_size(&self) -> u128 {
-        return self.size;
+        self.size
     }
 
     /// Get number of hash functions
     ///
     pub fn get_hash_count(&self) -> u32 {
-        return self.hash_count;
+        self.hash_count
     }
 
     /// Get bit vector
     ///
     pub fn get_bitvec(&self) -> &BitBox<u8, Msb0> {
-        return &self.bitvec;
+        &self.bitvec
     }
 
     /// Creates new bloom filter with given parameters.
@@ -78,7 +77,7 @@ impl BloomFilter {
         // Bit array of given size
         let bitvec = bitvec!(u8, Msb0; 0; size as usize);
 
-        return Self::new(fp_prob, size, hash_count, bitvec.into_boxed_bitslice());
+        Self::new(fp_prob, size, hash_count, bitvec.into_boxed_bitslice())
     }
 
     /// Creates a bloom filter with the given size and false positive probability
@@ -95,12 +94,12 @@ impl BloomFilter {
         // Bit array of given size
         let bitvec = bitvec!(u8, Msb0; 0; rounded_size as usize);
 
-        return Self::new(
+        Self::new(
             fp_prob,
             rounded_size,
             hash_count,
             bitvec.into_boxed_bitslice(),
-        );
+        )
     }
 
     /// Calculates the strings position within the bitvecotor
@@ -110,7 +109,7 @@ impl BloomFilter {
     /// * `seed` - Seed to use for murmur3 hash
     ///
     fn calc_item_position(&self, item: &str, seed: u32) -> Result<usize> {
-        return Ok((murmur3hash(&mut Cursor::new(item), seed)? % self.size) as usize);
+        Ok((murmur3hash(&mut Cursor::new(item), seed)? % self.size) as usize)
     }
 
     /// Add an item in the filter
@@ -125,9 +124,9 @@ impl BloomFilter {
             // `i` works as seed to mmh3.hash() function
             let digest = self.calc_item_position(item, i)?;
             // Set the bit to true
-            self.bitvec.set(digest as usize, true)
+            self.bitvec.set(digest, true)
         }
-        return Ok(());
+        Ok(())
     }
 
     /// Check for existence of an item in filter
@@ -138,11 +137,11 @@ impl BloomFilter {
     pub fn contains(&self, item: &str) -> Result<bool> {
         for i in 0..self.hash_count {
             let digest = self.calc_item_position(item, i)?;
-            if !self.bitvec[digest as usize] {
+            if !self.bitvec[digest] {
                 return Ok(false);
             }
         }
-        return Ok(true);
+        Ok(true)
     }
 
     /// Return the size of bit array(m) to used using
@@ -159,7 +158,7 @@ impl BloomFilter {
     pub fn calc_size(n: u64, p: f64) -> u64 {
         let mut m = (-(n as f64 * p.log(E)) / (2.0_f64.log(E).powi(2))) as u64;
         m += 8 - (m % 8); // round up to nearest multiple of 8
-        return m;
+        m
     }
 
     /// Return the hash function(k) to be used using
@@ -176,7 +175,7 @@ impl BloomFilter {
         if k > u32::MAX as f64 {
             bail!("Hash count is too large");
         }
-        return Ok(k as u32);
+        Ok(k as u32)
     }
 
     /// Calculates item size and hash count
@@ -199,7 +198,7 @@ impl BloomFilter {
                 item_size = temp_item_size;
             }
         }
-        return (item_size, u32::MAX);
+        (item_size, u32::MAX)
     }
 
     /// Loads bloom filter from hdf5 file
@@ -213,20 +212,19 @@ impl BloomFilter {
         let hash_count = file.dataset("hash_count")?.read_scalar::<u32>()?;
         let fp_prob = file.dataset("fp_prob")?.read_scalar::<f64>()?;
         let bytes = match Self::decode_hex(
-            &file
-                .dataset("bit_array")?
+            file.dataset("bit_array")?
                 .read_scalar::<VarLenAscii>()?
                 .as_str(),
         ) {
             Ok(bytes) => bytes,
             Err(err) => bail!(format!("Error while decoding hex: {}", err)),
         };
-        return Self::new(
+        Self::new(
             fp_prob,
             size,
             hash_count,
             BitVec::<u8, Msb0>::from_slice(&bytes).into_boxed_bitslice(),
-        );
+        )
     }
 
     /// Saves bloom filter to hdf5 file
@@ -279,7 +277,7 @@ impl BloomFilter {
         for start in (0..bit_array.len()).step_by(8) {
             bytes.push(bit_array[start..(start + 8)].load::<u8>());
         }
-        return Ok(bytes);
+        Ok(bytes)
     }
 }
 
