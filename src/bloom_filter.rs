@@ -5,7 +5,7 @@ use anyhow::{bail, Result};
 use bitvec::prelude::*;
 use murmur3::murmur3_x64_128 as murmur3hash;
 
-/// Thread safe BloomFilter struct for saving strings.
+/// Thread safe BloomFilter struct for saving strings. Using murmur3 hash function
 ///
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct BloomFilter {
@@ -23,7 +23,7 @@ pub struct BloomFilter {
 }
 
 impl BloomFilter {
-    /// Class for Bloom filter, using murmur3 hash function
+    /// Creates a new Bloom filter
     ///
     /// Arguments:
     /// * `fp_prob` - False Positive probability in decimal
