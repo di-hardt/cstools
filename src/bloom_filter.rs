@@ -1,11 +1,11 @@
-use std::f64::consts::E;
 use std::io::Cursor;
+use std::{f64::consts::E, sync::atomic::AtomicU8};
 
 use anyhow::{bail, Result};
 use bitvec::prelude::*;
 use murmur3::murmur3_x64_128 as murmur3hash;
 
-/// BloomFilter struct for saving strings.
+/// Thread safe BloomFilter struct for saving strings.
 ///
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct BloomFilter {
@@ -19,7 +19,7 @@ pub struct BloomFilter {
     hash_count: u32,
 
     // Bit vector
-    bitvec: BitBox<u8, Msb0>,
+    bitvec: BitBox<AtomicU8, Msb0>,
 }
 
 impl BloomFilter {
@@ -31,7 +31,12 @@ impl BloomFilter {
     /// * `hash_count` - Number of hash functions to use
     /// * `bitvec` - Bit vector
     ///
-    pub fn new(fp_prob: f64, size: u64, hash_count: u32, bitvec: BitBox<u8, Msb0>) -> Result<Self> {
+    pub fn new(
+        fp_prob: f64,
+        size: u64,
+        hash_count: u32,
+        bitvec: BitBox<AtomicU8, Msb0>,
+    ) -> Result<Self> {
         Ok(Self {
             fp_prob,
             hash_count,
@@ -60,7 +65,7 @@ impl BloomFilter {
 
     /// Get bit vector
     ///
-    pub fn get_bitvec(&self) -> &BitBox<u8, Msb0> {
+    pub fn get_bitvec(&self) -> &BitBox<AtomicU8, Msb0> {
         &self.bitvec
     }
 
@@ -78,7 +83,7 @@ impl BloomFilter {
         let hash_count = Self::calc_hash_count(size, items_count)?;
 
         // Bit array of given size
-        let bitvec = bitvec!(u8, Msb0; 0; size as usize);
+        let bitvec = bitvec!(AtomicU8, Msb0; 0; size as usize);
 
         Self::new(fp_prob, size, hash_count, bitvec.into_boxed_bitslice())
     }
@@ -95,7 +100,7 @@ impl BloomFilter {
         let (_, hash_count) = Self::calc_item_size_and_hash_count(rounded_size, fp_prob);
 
         // Bit array of given size
-        let bitvec = bitvec!(u8, Msb0; 0; rounded_size as usize);
+        let bitvec = bitvec!(AtomicU8, Msb0; 0; rounded_size as usize);
 
         Self::new(
             fp_prob,
@@ -227,7 +232,7 @@ impl BloomFilter {
             fp_prob,
             size,
             hash_count,
-            BitVec::<u8, Msb0>::from_slice(&bytes).into_boxed_bitslice(),
+            BitVec::<AtomicU8, Msb0>::from_slice(&bytes).into_boxed_bitslice(),
         )
     }
 
@@ -266,10 +271,13 @@ impl BloomFilter {
     /// * `s` - Hex string
     ///
     #[cfg(feature = "hdf5")]
-    pub fn decode_hex(s: &str) -> Result<Vec<u8>, core::num::ParseIntError> {
+    pub fn decode_hex(s: &str) -> Result<Vec<AtomicU8>, core::num::ParseIntError> {
         (0..s.len())
             .step_by(2)
-            .map(|i| u8::from_str_radix(&s[i..i + 2], 16))
+            .map(|i| match u8::from_str_radix(&s[i..i + 2], 16) {
+                Ok(b) => Ok(AtomicU8::new(b)),
+                Err(err) => Err(err),
+            })
             .collect()
     }
 
@@ -279,7 +287,7 @@ impl BloomFilter {
     /// * `bit_array` - Bit array
     ///
     #[cfg(feature = "hdf5")]
-    pub fn encode_hex(bit_array: &BitBox<u8, Msb0>) -> Result<Vec<u8>> {
+    pub fn encode_hex(bit_array: &BitBox<AtomicU8, Msb0>) -> Result<Vec<u8>> {
         let mut bytes: Vec<u8> = Vec::with_capacity(bit_array.len() / 8);
         for start in (0..bit_array.len()).step_by(8) {
             bytes.push(bit_array[start..(start + 8)].load::<u8>());
