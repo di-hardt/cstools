@@ -7,6 +7,7 @@ use murmur3::murmur3_x64_128 as murmur3hash;
 
 /// BloomFilter struct for saving strings.
 ///
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct BloomFilter {
     /// False positive probability
     fp_prob: f64,
@@ -352,6 +353,62 @@ mod tests {
 
         if temp_file.is_file() {
             std::fs::remove_file(&temp_file).unwrap();
+        }
+    }
+
+    /// Using Serde to serialize and deserialize the bloom filter
+    ///
+    #[cfg(feature = "serde")]
+    #[test]
+    fn test_serde() {
+        use rmp_serde::{Deserializer, Serializer};
+        use serde::{Deserialize, Serialize};
+
+        let some_strings: Vec<String> =
+            read_to_string(PathBuf::from("test_data/10000_random_strings.txt"))
+                .unwrap()
+                .lines()
+                .map(String::from)
+                .collect();
+
+        let mut bloom_filter =
+            BloomFilter::new_by_item_count_and_fp_prob(some_strings.len() as u64, 0.01).unwrap();
+
+        for a_string in some_strings.iter() {
+            bloom_filter.add(a_string).unwrap();
+        }
+
+        let temp_file_path = std::env::temp_dir().join("bloom_filter.messagepack");
+        if temp_file_path.is_file() {
+            std::fs::remove_file(&temp_file_path).unwrap();
+        }
+
+        let mut temp_file = std::fs::File::create(&temp_file_path).unwrap();
+        let mut byte_writer = std::io::BufWriter::new(&mut temp_file);
+
+        bloom_filter
+            .serialize(&mut Serializer::new(&mut byte_writer))
+            .unwrap();
+
+        drop(byte_writer);
+
+        let mut temp_file = std::fs::File::open(&temp_file_path).unwrap();
+
+        let mut byte_reader = std::io::BufReader::new(&mut temp_file);
+        let read_bloom_filter =
+            BloomFilter::deserialize(&mut Deserializer::new(&mut byte_reader)).unwrap();
+
+        assert!(bloom_filter.size == read_bloom_filter.size);
+        assert!(bloom_filter.hash_count == read_bloom_filter.hash_count);
+        assert!(bloom_filter.fp_prob == read_bloom_filter.fp_prob);
+        assert!(bloom_filter.bitvec == read_bloom_filter.bitvec);
+
+        for a_string in some_strings.iter() {
+            assert!(read_bloom_filter.contains(a_string).unwrap());
+        }
+
+        if temp_file_path.is_file() {
+            std::fs::remove_file(&temp_file_path).unwrap();
         }
     }
 }
