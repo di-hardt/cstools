@@ -9,6 +9,12 @@ homepage = "https://github.com/di-hardt/cstools.git"
 documentation = "https://github.com/di-hardt/cstools.git"
 license-file = "LICENSE"
 
+exclude = [
+    "/.github",
+    "/.vscode",
+    "/test_data"
+]
+
 [dependencies]
 anyhow = "1.0.71"
 bitvec = "1.0.1"
