@@ -137,6 +137,26 @@ impl BloomFilter {
         Ok(())
     }
 
+    /// Add an item in the filter
+    ///
+    /// This is equivalent to [`.add()`], except that it does not require an
+    /// `&mut` reference.
+    ///
+    /// # Arguments
+    ///
+    /// * `item` - Item to add
+    ///
+    pub fn add_aliased(&self, item: &str) -> Result<()> {
+        for i in 0..self.hash_count {
+            // Create hash for given item.
+            // `i` works as seed to mmh3.hash() function
+            let digest = self.calc_item_position(item, i)?;
+            // Set the bit to true
+            self.bitvec.set_aliased(digest, true)
+        }
+        Ok(())
+    }
+
     /// Check for existence of an item in filter
     ///
     /// # Arguments
@@ -315,8 +335,14 @@ mod tests {
         let mut bloom_filter =
             BloomFilter::new_by_item_count_and_fp_prob(some_strings.len() as u64, 0.01).unwrap();
 
-        for a_string in some_strings.iter() {
+        let some_strings_split = some_strings.split_at(some_strings.len() / 2);
+
+        for a_string in some_strings_split.0.iter() {
             bloom_filter.add(a_string).unwrap();
+        }
+
+        for a_string in some_strings_split.1.iter() {
+            bloom_filter.add_aliased(a_string).unwrap();
         }
 
         for a_string in some_strings.iter() {
