@@ -8,6 +8,7 @@ use murmur3::murmur3_x64_128 as murmur3hash;
 /// Thread safe BloomFilter struct for saving strings. Using murmur3 hash function
 ///
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Clone)]
 pub struct BloomFilter {
     /// False positive probability
     fp_prob: f64,
