@@ -4,3 +4,8 @@
 
 /// BloomFilter implementation
 pub mod bloom_filter;
+/// Helpers for HDF5 serialization
+#[cfg(feature = "hdf5")]
+pub mod hdf5_utils;
+#[cfg(feature = "serde")]
+pub mod serde_utils;

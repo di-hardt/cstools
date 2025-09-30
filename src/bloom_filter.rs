@@ -1,30 +1,33 @@
-use std::io::Cursor;
-use std::{f64::consts::E, sync::atomic::AtomicU8};
+use std::{f64::consts::E, io::Read};
 
 use anyhow::{bail, Result};
 use bitvec::prelude::*;
 use murmur3::murmur3_x64_128 as murmur3hash;
 
-/// Thread safe BloomFilter struct for saving strings. Using murmur3 hash function
+/// BloomFilter using murmur3 hash functions
 ///
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone)]
-pub struct BloomFilter {
+pub struct BloomFilter<T>
+where
+    T: BitStore,
+{
     /// False positive probability
-    fp_prob: f64,
+    pub(crate) fp_prob: f64,
 
-    /// Length of the bloom filter as u128 for position calculation
-    #[cfg_attr(feature = "serde", serde(skip))]
-    length: u128,
+    /// Length of the bloom filter as u128 fosr position calculation
+    pub(crate) length: u128,
 
     // Number of hash functions to apply
-    hash_count: u32,
+    pub(crate) hash_count: u32,
 
     // Bit vector
-    bitvec: BitBox<AtomicU8, Msb0>,
+    pub(crate) bitvec: BitBox<T, Msb0>,
 }
 
-impl BloomFilter {
+impl<T> BloomFilter<T>
+where
+    T: BitStore,
+{
     /// Creates a new Bloom filter
     ///
     /// Arguments:
@@ -33,7 +36,7 @@ impl BloomFilter {
     /// * `hash_count` - Number of hash functions to use
     /// * `bitvec` - Bit vector
     ///
-    fn new(fp_prob: f64, hash_count: u32, bitvec: BitBox<AtomicU8, Msb0>) -> Result<Self> {
+    pub(crate) fn new(fp_prob: f64, hash_count: u32, bitvec: BitBox<T, Msb0>) -> Result<Self> {
         let length = bitvec.len() as u128;
 
         Ok(Self {
@@ -64,7 +67,7 @@ impl BloomFilter {
 
     /// Get bit vector
     ///
-    pub fn bitvec(&self) -> &BitBox<AtomicU8, Msb0> {
+    pub fn bitvec(&self) -> &BitBox<T, Msb0> {
         &self.bitvec
     }
 
@@ -89,7 +92,7 @@ impl BloomFilter {
         let hash_count = Self::calc_hash_count(length, number_of_item)?;
 
         // Bit array of given size
-        let bitvec = bitvec!(AtomicU8, Msb0; 0; length as usize);
+        let bitvec = bitvec!(T, Msb0; 0; length as usize);
 
         Self::new(fp_prob, hash_count, bitvec.into_boxed_bitslice())
     }
@@ -101,12 +104,12 @@ impl BloomFilter {
     /// * `fp_prob` - False Positive probability in decimal
     ///
     pub fn new_by_length_and_fp_prob(length: u64, fp_prob: f64) -> Result<Self> {
-        let rounded_length = length + 8 - (length % 8);
+        let rounded_length = Self::round_to_t(length);
 
         let (_, hash_count) = Self::calc_item_size_and_hash_count(rounded_length, fp_prob);
 
         // Bit array of given size
-        let bitvec = bitvec!(AtomicU8, Msb0; 0; rounded_length as usize);
+        let bitvec = bitvec!(T, Msb0; 0; rounded_length as usize);
 
         Self::new(fp_prob, hash_count, bitvec.into_boxed_bitslice())
     }
@@ -117,17 +120,23 @@ impl BloomFilter {
     /// * `item` - Item to calculate position for
     /// * `seed` - Seed to use for murmur3 hash
     ///
-    fn calc_item_position(&self, item: &str, seed: u32) -> Result<usize> {
-        Ok((murmur3hash(&mut Cursor::new(item), seed)? % self.length) as usize)
+    fn calc_item_position<I>(&self, item: &mut I, seed: u32) -> Result<usize>
+    where
+        I: Read,
+    {
+        Ok((murmur3hash(item, seed)? % self.length) as usize)
     }
 
-    /// Add an item in the filter
+    /// Add an item to the filter
     ///
     /// # Arguments
     ///
     /// * `item` - Item to add
     ///
-    pub fn add(&mut self, item: &str) -> Result<()> {
+    pub fn add<I>(&mut self, item: &mut I) -> Result<()>
+    where
+        I: Read,
+    {
         for i in 0..self.hash_count {
             // Create hash for given item.
             // `i` works as seed to mmh3.hash() function
@@ -138,32 +147,15 @@ impl BloomFilter {
         Ok(())
     }
 
-    /// Add an item to the filter
-    ///
-    /// This is equivalent to [`.add()`], except that it does not require an
-    /// `&mut` reference.
-    ///
-    /// # Arguments
-    ///
-    /// * `item` - Item to add
-    ///
-    pub fn add_aliased(&self, item: &str) -> Result<()> {
-        for i in 0..self.hash_count {
-            // Create hash for given item.
-            // `i` works as seed to mmh3.hash() function
-            let digest = self.calc_item_position(item, i)?;
-            // Set the bit to true
-            self.bitvec.set_aliased(digest, true)
-        }
-        Ok(())
-    }
-
-    /// Check for existence of the given item in filter
+    /// Check for existence of the given ixtem in filter
     ///
     /// # Arguments
     /// * `item` - Item to search
     ///
-    pub fn contains(&self, item: &str) -> Result<bool> {
+    pub fn contains<I>(&self, item: &mut I) -> Result<bool>
+    where
+        I: Read,
+    {
         for i in 0..self.hash_count {
             let digest = self.calc_item_position(item, i)?;
             if !self.bitvec[digest] {
@@ -177,7 +169,7 @@ impl BloomFilter {
     /// the following formula
     /// m = -(n * lg(p)) / (lg(2)^2)
     ///
-    /// Rounded up to nearest multiple of 8
+    /// Rounded up to nearest multiple of T
     ///
     /// # Arguments
     ///
@@ -185,9 +177,8 @@ impl BloomFilter {
     /// `p` - False Positive probability in decimal
     ///
     pub fn calc_length(n: u64, p: f64) -> u64 {
-        let mut m = (-(n as f64 * p.log(E)) / (2.0_f64.log(E).powi(2))) as u64;
-        m += 8 - (m % 8); // round up to nearest multiple of 8
-        m
+        let m = (-(n as f64 * p.log(E)) / (2.0_f64.log(E).powi(2))) as u64;
+        Self::round_to_t(m)
     }
 
     /// Calculates the number of hash function `k` to apply when checking for an item, using
@@ -230,125 +221,126 @@ impl BloomFilter {
         (item_size, u32::MAX)
     }
 
-    /// Loads bloom filter from hdf5 file
-    ///
-    /// # Arguments
-    /// * `path` - Path to hdf5 file
-    ///
-    #[cfg(feature = "hdf5")]
-    pub fn load_hdf5(path: &std::path::PathBuf) -> Result<Self> {
-        let file = hdf5::File::open(path)?;
-        let hash_count = file.dataset("hash_count")?.read_scalar::<u32>()?;
-        let fp_prob = file.dataset("fp_prob")?.read_scalar::<f64>()?;
-        let bytes = match Self::decode_hex(
-            file.dataset("bit_array")?
-                .read_scalar::<hdf5::types::VarLenAscii>()?
-                .as_str(),
-        ) {
-            Ok(bytes) => bytes,
-            Err(err) => bail!(format!("Error while decoding hex: {}", err)),
-        };
-        Self::new(
-            fp_prob,
-            hash_count,
-            BitVec::<AtomicU8, Msb0>::from_slice(&bytes).into_boxed_bitslice(),
-        )
-    }
-
-    /// Saves bloom filter to hdf5 file
-    ///
-    /// # Arguments
-    /// * `path` - Path to hdf5 file
-    ///
-    #[cfg(feature = "hdf5")]
-    pub fn save_hdf5(&self, path: &std::path::PathBuf) -> Result<()> {
-        let file = hdf5::File::create(path)?;
-        file.new_dataset::<u32>()
-            .create("hash_count")?
-            .write_scalar(&self.hash_count)?;
-        file.new_dataset::<f64>()
-            .create("fp_prob")?
-            .write_scalar(&self.fp_prob)?;
-        // Convert bitvec to hex string
-        let s_ascii = Self::encode_hex(&self.bitvec)?
-            .iter()
-            .map(|b| format!("{:02X}", b))
-            .collect::<String>();
-        // Save hex string to hdf5 file
-        file.new_dataset::<hdf5::types::VarLenAscii>()
-            .create("bit_array")?
-            .write_scalar(&hdf5::types::VarLenAscii::from_ascii(&s_ascii)?)?;
-        Ok(())
-    }
-
-    /// Decodes hex string to bytes
-    ///
-    /// # Arguments
-    /// * `s` - Hex string
-    ///
-    #[cfg(feature = "hdf5")]
-    pub fn decode_hex(s: &str) -> Result<Vec<AtomicU8>, core::num::ParseIntError> {
-        (0..s.len())
-            .step_by(2)
-            .map(|i| match u8::from_str_radix(&s[i..i + 2], 16) {
-                Ok(b) => Ok(AtomicU8::new(b)),
-                Err(err) => Err(err),
-            })
-            .collect()
-    }
-
-    /// Encodes bytes to hex string
-    ///
-    /// # Arguments
-    /// * `bit_array` - Bit array
-    ///
-    #[cfg(feature = "hdf5")]
-    pub fn encode_hex(bit_array: &BitBox<AtomicU8, Msb0>) -> Result<Vec<u8>> {
-        let mut bytes: Vec<u8> = Vec::with_capacity(bit_array.len() / 8);
-        for start in (0..bit_array.len()).step_by(8) {
-            bytes.push(bit_array[start..(start + 8)].load::<u8>());
+    pub fn round_to_t(length: u64) -> u64 {
+        let remains = length % (std::mem::size_of::<T>() * 8) as u64;
+        if remains == 0 {
+            length
+        } else {
+            length + (std::mem::size_of::<T>() * 8) as u64 - remains
         }
-        Ok(bytes)
+    }
+}
+
+impl<T> BloomFilter<T>
+where
+    T: BitStore + radium::Radium,
+{
+    /// Add an item to the filter
+    ///
+    /// This is equivalent to [`.add()`], except that it does not require an
+    /// `&mut` reference.
+    ///
+    /// # Arguments
+    ///
+    /// * `item` - Item to add
+    ///
+    pub fn add_aliased<I>(&self, item: &mut I) -> Result<()>
+    where
+        I: Read,
+    {
+        for i in 0..self.hash_count {
+            // Create hash for given item.
+            // `i` works as seed to mmh3.hash() function
+            let digest = self.calc_item_position(item, i)?;
+            // Set the bit to true
+            self.bitvec.set_aliased(digest, true)
+        }
+        Ok(())
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
     use std::fs::read_to_string;
+    use std::io::Cursor;
     use std::path::PathBuf;
+    use std::sync::atomic::{AtomicU16, AtomicU32, AtomicU64, AtomicU8, AtomicUsize};
 
     use super::*;
 
+    /// Inerting and finding with mutable reference
+    ///
+    #[test]
+    fn test_inserting_and_finding_mut() {
+        test_inserting_and_finding_mut_generic::<u8>();
+        test_inserting_and_finding_mut_generic::<u16>();
+        test_inserting_and_finding_mut_generic::<u32>();
+        test_inserting_and_finding_mut_generic::<u64>();
+        test_inserting_and_finding_mut_generic::<usize>();
+
+        test_inserting_and_finding_mut_generic::<Cell<u8>>();
+        test_inserting_and_finding_mut_generic::<Cell<u16>>();
+        test_inserting_and_finding_mut_generic::<Cell<u32>>();
+        test_inserting_and_finding_mut_generic::<Cell<u64>>();
+        test_inserting_and_finding_mut_generic::<Cell<usize>>();
+
+        test_inserting_and_finding_mut_generic::<AtomicU8>();
+        test_inserting_and_finding_mut_generic::<AtomicU16>();
+        test_inserting_and_finding_mut_generic::<AtomicU32>();
+        test_inserting_and_finding_mut_generic::<AtomicU64>();
+        test_inserting_and_finding_mut_generic::<AtomicUsize>();
+    }
+
+    fn test_inserting_and_finding_mut_generic<T>()
+    where
+        T: BitStore,
+    {
+        let some_strings: Vec<String> =
+            read_to_string(PathBuf::from("test_data/10000_random_strings.txt"))
+                .unwrap()
+                .lines()
+                .map(String::from)
+                .collect();
+
+        let mut bloom_filter: BloomFilter<T> =
+            BloomFilter::new_by_item_count_and_fp_prob(some_strings.len() as u64, 0.01).unwrap();
+
+        for a_string in some_strings.iter() {
+            bloom_filter
+                .add(&mut Cursor::new(a_string.as_bytes()))
+                .unwrap();
+        }
+
+        for a_string in some_strings.iter() {
+            assert!(bloom_filter
+                .contains(&mut Cursor::new(a_string.as_bytes()))
+                .unwrap());
+        }
+    }
+
+    /// Inerting and finding with using atomic operations
+    ///
     #[test]
     fn test_inserting_and_finding() {
-        let some_strings: Vec<String> =
-            read_to_string(PathBuf::from("test_data/10000_random_strings.txt"))
-                .unwrap()
-                .lines()
-                .map(String::from)
-                .collect();
+        test_inserting_and_finding_generic::<Cell<u8>>();
+        test_inserting_and_finding_generic::<Cell<u16>>();
+        test_inserting_and_finding_generic::<Cell<u32>>();
+        test_inserting_and_finding_generic::<Cell<u64>>();
+        test_inserting_and_finding_generic::<Cell<usize>>();
 
-        let mut bloom_filter =
-            BloomFilter::new_by_item_count_and_fp_prob(some_strings.len() as u64, 0.01).unwrap();
-
-        let some_strings_split = some_strings.split_at(some_strings.len() / 2);
-
-        for a_string in some_strings_split.0.iter() {
-            bloom_filter.add(a_string).unwrap();
-        }
-
-        for a_string in some_strings_split.1.iter() {
-            bloom_filter.add_aliased(a_string).unwrap();
-        }
-
-        for a_string in some_strings.iter() {
-            assert!(bloom_filter.contains(a_string).unwrap());
-        }
+        test_inserting_and_finding_generic::<Cell<usize>>();
+        test_inserting_and_finding_generic::<AtomicU8>();
+        test_inserting_and_finding_generic::<AtomicU16>();
+        test_inserting_and_finding_generic::<AtomicU32>();
+        test_inserting_and_finding_generic::<AtomicU64>();
+        test_inserting_and_finding_generic::<AtomicUsize>();
     }
 
-    #[cfg(feature = "hdf5")]
-    #[test]
-    fn test_save_and_load() {
+    fn test_inserting_and_finding_generic<T>()
+    where
+        T: BitStore + radium::Radium,
+    {
         let some_strings: Vec<String> =
             read_to_string(PathBuf::from("test_data/10000_random_strings.txt"))
                 .unwrap()
@@ -356,89 +348,19 @@ mod tests {
                 .map(String::from)
                 .collect();
 
-        let mut bloom_filter =
+        let bloom_filter: BloomFilter<T> =
             BloomFilter::new_by_item_count_and_fp_prob(some_strings.len() as u64, 0.01).unwrap();
 
         for a_string in some_strings.iter() {
-            bloom_filter.add(a_string).unwrap();
+            bloom_filter
+                .add_aliased(&mut Cursor::new(a_string.as_bytes()))
+                .unwrap();
         }
-
-        let temp_file = std::env::temp_dir().join("bloom_filter.h5");
-        if temp_file.is_file() {
-            std::fs::remove_file(&temp_file).unwrap();
-        }
-
-        bloom_filter.save_hdf5(&temp_file).unwrap();
-
-        let read_bloom_filter = BloomFilter::load_hdf5(&temp_file).unwrap();
-
-        assert!(bloom_filter.len() == read_bloom_filter.len());
-        assert!(bloom_filter.hash_count == read_bloom_filter.hash_count);
-        assert!(bloom_filter.fp_prob == read_bloom_filter.fp_prob);
-        assert!(bloom_filter.bitvec == read_bloom_filter.bitvec);
 
         for a_string in some_strings.iter() {
-            assert!(read_bloom_filter.contains(a_string).unwrap());
-        }
-
-        if temp_file.is_file() {
-            std::fs::remove_file(&temp_file).unwrap();
-        }
-    }
-
-    /// Using Serde to serialize and deserialize the bloom filter
-    ///
-    #[cfg(feature = "serde")]
-    #[test]
-    fn test_serde() {
-        use rmp_serde::{Deserializer, Serializer};
-        use serde::{Deserialize, Serialize};
-
-        let some_strings: Vec<String> =
-            read_to_string(PathBuf::from("test_data/10000_random_strings.txt"))
-                .unwrap()
-                .lines()
-                .map(String::from)
-                .collect();
-
-        let mut bloom_filter =
-            BloomFilter::new_by_item_count_and_fp_prob(some_strings.len() as u64, 0.01).unwrap();
-
-        for a_string in some_strings.iter() {
-            bloom_filter.add(a_string).unwrap();
-        }
-
-        let temp_file_path = std::env::temp_dir().join("bloom_filter.messagepack");
-        if temp_file_path.is_file() {
-            std::fs::remove_file(&temp_file_path).unwrap();
-        }
-
-        let mut temp_file = std::fs::File::create(&temp_file_path).unwrap();
-        let mut byte_writer = std::io::BufWriter::new(&mut temp_file);
-
-        bloom_filter
-            .serialize(&mut Serializer::new(&mut byte_writer))
-            .unwrap();
-
-        drop(byte_writer);
-
-        let mut temp_file = std::fs::File::open(&temp_file_path).unwrap();
-
-        let mut byte_reader = std::io::BufReader::new(&mut temp_file);
-        let read_bloom_filter =
-            BloomFilter::deserialize(&mut Deserializer::new(&mut byte_reader)).unwrap();
-
-        assert!(bloom_filter.len() == read_bloom_filter.len());
-        assert!(bloom_filter.hash_count == read_bloom_filter.hash_count);
-        assert!(bloom_filter.fp_prob == read_bloom_filter.fp_prob);
-        assert!(bloom_filter.bitvec == read_bloom_filter.bitvec);
-
-        for a_string in some_strings.iter() {
-            assert!(read_bloom_filter.contains(a_string).unwrap());
-        }
-
-        if temp_file_path.is_file() {
-            std::fs::remove_file(&temp_file_path).unwrap();
+            assert!(bloom_filter
+                .contains(&mut Cursor::new(a_string.as_bytes()))
+                .unwrap());
         }
     }
 }

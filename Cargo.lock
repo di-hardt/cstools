@@ -68,6 +68,7 @@ dependencies = [
  "bitvec",
  "hdf5",
  "murmur3",
+ "radium",
  "rmp-serde",
  "serde",
 ]
