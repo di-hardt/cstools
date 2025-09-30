@@ -13,8 +13,9 @@ pub struct BloomFilter {
     /// False positive probability
     fp_prob: f64,
 
-    /// Size of the bloom filter. Allowed us a max of u64 but we store it as u128 so it only converted once
-    size: u128,
+    /// Length of the bloom filter as u128 for position calculation
+    #[cfg_attr(feature = "serde", serde(skip))]
+    length: u128,
 
     // Number of hash functions to apply
     hash_count: u32,
@@ -28,21 +29,18 @@ impl BloomFilter {
     ///
     /// Arguments:
     /// * `fp_prob` - False Positive probability in decimal
-    /// * `size` - Size of bloom filter
+    /// * `length` - Length of the bloom filter
     /// * `hash_count` - Number of hash functions to use
     /// * `bitvec` - Bit vector
     ///
-    pub fn new(
-        fp_prob: f64,
-        size: u64,
-        hash_count: u32,
-        bitvec: BitBox<AtomicU8, Msb0>,
-    ) -> Result<Self> {
+    fn new(fp_prob: f64, hash_count: u32, bitvec: BitBox<AtomicU8, Msb0>) -> Result<Self> {
+        let length = bitvec.len() as u128;
+
         Ok(Self {
             fp_prob,
             hash_count,
+            length,
             bitvec,
-            size: size as u128,
         })
     }
 
@@ -52,63 +50,65 @@ impl BloomFilter {
         self.fp_prob
     }
 
-    /// Get size of bloom filter
+    /// Size of bit vec in bytes
     ///
-    pub fn get_size(&self) -> u128 {
-        self.size
+    pub fn get_size(&self) -> usize {
+        self.bitvec.len() / 8
     }
 
     /// Get number of hash functions
     ///
-    pub fn get_hash_count(&self) -> u32 {
+    pub fn hash_count(&self) -> u32 {
         self.hash_count
     }
 
     /// Get bit vector
     ///
-    pub fn get_bitvec(&self) -> &BitBox<AtomicU8, Msb0> {
+    pub fn bitvec(&self) -> &BitBox<AtomicU8, Msb0> {
         &self.bitvec
     }
 
-    /// Creates new bloom filter with given parameters.
+    /// Length of bit vector
+    ///
+    #[allow(clippy::len_without_is_empty)]
+    pub fn len(&self) -> usize {
+        self.bitvec.len()
+    }
+
+    /// Creates new bloom filter for the given number of items and false positive probability
     ///
     /// # Arguments
-    /// * `items_count` - Number of items expected to be stored in bloom filter
+    /// * `number_of_item` - Number of items expected to be stored in the bloom filter
     /// * `fp_prob` - False Positive probability in decimal
     ///
-    pub fn new_by_item_count_and_fp_prob(items_count: u64, fp_prob: f64) -> Result<Self> {
-        // Size of bit array to use
-        let size = Self::calc_size(items_count, fp_prob);
+    pub fn new_by_item_count_and_fp_prob(number_of_item: u64, fp_prob: f64) -> Result<Self> {
+        // length of bit array to use
+        let length = Self::calc_length(number_of_item, fp_prob);
 
         // Number of hash functions to use
-        let hash_count = Self::calc_hash_count(size, items_count)?;
+        let hash_count = Self::calc_hash_count(length, number_of_item)?;
 
         // Bit array of given size
-        let bitvec = bitvec!(AtomicU8, Msb0; 0; size as usize);
+        let bitvec = bitvec!(AtomicU8, Msb0; 0; length as usize);
 
-        Self::new(fp_prob, size, hash_count, bitvec.into_boxed_bitslice())
+        Self::new(fp_prob, hash_count, bitvec.into_boxed_bitslice())
     }
 
     /// Creates a bloom filter with the given size and false positive probability
     ///
     /// # Arguments
-    /// * `size` - Number of bits in bloom filter
+    /// * `length` - Length of the bloom filter
     /// * `fp_prob` - False Positive probability in decimal
     ///
-    pub fn new_by_size_and_fp_prob(size: u64, fp_prob: f64) -> Result<Self> {
-        let rounded_size = size + 8 - (size % 8);
+    pub fn new_by_length_and_fp_prob(length: u64, fp_prob: f64) -> Result<Self> {
+        let rounded_length = length + 8 - (length % 8);
 
-        let (_, hash_count) = Self::calc_item_size_and_hash_count(rounded_size, fp_prob);
+        let (_, hash_count) = Self::calc_item_size_and_hash_count(rounded_length, fp_prob);
 
         // Bit array of given size
-        let bitvec = bitvec!(AtomicU8, Msb0; 0; rounded_size as usize);
+        let bitvec = bitvec!(AtomicU8, Msb0; 0; rounded_length as usize);
 
-        Self::new(
-            fp_prob,
-            rounded_size,
-            hash_count,
-            bitvec.into_boxed_bitslice(),
-        )
+        Self::new(fp_prob, hash_count, bitvec.into_boxed_bitslice())
     }
 
     /// Calculates the strings position within the bitvecotor
@@ -118,7 +118,7 @@ impl BloomFilter {
     /// * `seed` - Seed to use for murmur3 hash
     ///
     fn calc_item_position(&self, item: &str, seed: u32) -> Result<usize> {
-        Ok((murmur3hash(&mut Cursor::new(item), seed)? % self.size) as usize)
+        Ok((murmur3hash(&mut Cursor::new(item), seed)? % self.length) as usize)
     }
 
     /// Add an item in the filter
@@ -138,7 +138,7 @@ impl BloomFilter {
         Ok(())
     }
 
-    /// Add an item in the filter
+    /// Add an item to the filter
     ///
     /// This is equivalent to [`.add()`], except that it does not require an
     /// `&mut` reference.
@@ -158,7 +158,7 @@ impl BloomFilter {
         Ok(())
     }
 
-    /// Check for existence of an item in filter
+    /// Check for existence of the given item in filter
     ///
     /// # Arguments
     /// * `item` - Item to search
@@ -173,31 +173,31 @@ impl BloomFilter {
         Ok(true)
     }
 
-    /// Return the size of bit array(m) to used using
-    /// following formula
+    /// Calculates the length of the bit array `m` using
+    /// the following formula
     /// m = -(n * lg(p)) / (lg(2)^2)
     ///
     /// Rounded up to nearest multiple of 8
     ///
     /// # Arguments
     ///
-    /// `n` - number of items expected to be stored in filter
+    /// `n` - Number of items expected to be stored in filter
     /// `p` - False Positive probability in decimal
     ///
-    pub fn calc_size(n: u64, p: f64) -> u64 {
+    pub fn calc_length(n: u64, p: f64) -> u64 {
         let mut m = (-(n as f64 * p.log(E)) / (2.0_f64.log(E).powi(2))) as u64;
         m += 8 - (m % 8); // round up to nearest multiple of 8
         m
     }
 
-    /// Return the hash function(k) to be used using
+    /// Calculates the number of hash function `k` to apply when checking for an item, using
     /// following formula
     /// k = (m/n) * lg(2)
     ///
     /// # Arguments
     ///
-    /// * `m` - size of bit array
-    /// * `n` - number of items expected to be stored in filter
+    /// * `m` - Length of bit array
+    /// * `n` - Number of items expected to be stored in filter
     ///
     pub fn calc_hash_count(m: u64, n: u64) -> Result<u32> {
         let k = ((m as f64) / (n as f64)) * 2.0_f64.log(E);
@@ -238,7 +238,6 @@ impl BloomFilter {
     #[cfg(feature = "hdf5")]
     pub fn load_hdf5(path: &std::path::PathBuf) -> Result<Self> {
         let file = hdf5::File::open(path)?;
-        let size = file.dataset("size")?.read_scalar::<u64>()?;
         let hash_count = file.dataset("hash_count")?.read_scalar::<u32>()?;
         let fp_prob = file.dataset("fp_prob")?.read_scalar::<f64>()?;
         let bytes = match Self::decode_hex(
@@ -251,7 +250,6 @@ impl BloomFilter {
         };
         Self::new(
             fp_prob,
-            size,
             hash_count,
             BitVec::<AtomicU8, Msb0>::from_slice(&bytes).into_boxed_bitslice(),
         )
@@ -265,9 +263,6 @@ impl BloomFilter {
     #[cfg(feature = "hdf5")]
     pub fn save_hdf5(&self, path: &std::path::PathBuf) -> Result<()> {
         let file = hdf5::File::create(path)?;
-        file.new_dataset::<u64>()
-            .create("size")?
-            .write_scalar(&(self.size as u64))?;
         file.new_dataset::<u32>()
             .create("hash_count")?
             .write_scalar(&self.hash_count)?;
@@ -377,7 +372,7 @@ mod tests {
 
         let read_bloom_filter = BloomFilter::load_hdf5(&temp_file).unwrap();
 
-        assert!(bloom_filter.size == read_bloom_filter.size);
+        assert!(bloom_filter.len() == read_bloom_filter.len());
         assert!(bloom_filter.hash_count == read_bloom_filter.hash_count);
         assert!(bloom_filter.fp_prob == read_bloom_filter.fp_prob);
         assert!(bloom_filter.bitvec == read_bloom_filter.bitvec);
@@ -433,7 +428,7 @@ mod tests {
         let read_bloom_filter =
             BloomFilter::deserialize(&mut Deserializer::new(&mut byte_reader)).unwrap();
 
-        assert!(bloom_filter.size == read_bloom_filter.size);
+        assert!(bloom_filter.len() == read_bloom_filter.len());
         assert!(bloom_filter.hash_count == read_bloom_filter.hash_count);
         assert!(bloom_filter.fp_prob == read_bloom_filter.fp_prob);
         assert!(bloom_filter.bitvec == read_bloom_filter.bitvec);
