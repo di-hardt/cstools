@@ -4,6 +4,7 @@ use bitvec::store::BitStore;
 use serde::de::{self, Deserialize, Deserializer, MapAccess, SeqAccess, Visitor};
 use serde::ser::{Serialize, SerializeStruct, Serializer};
 
+use crate::bloom_filter::error::BloomFilterSerDesError;
 use crate::bloom_filter::BloomFilter;
 
 impl<T> Serialize for BloomFilter<T>
@@ -100,11 +101,12 @@ where
                     .next_element()?
                     .ok_or_else(|| de::Error::invalid_length(0, &self))?;
                 if type_memory_width != std::mem::size_of::<T>() as u8 {
-                    return Err(de::Error::custom(format!(
-                        "Mismatched type memory width: expected {}, found {:?}",
-                        std::mem::size_of::<T>(),
-                        type_memory_width
-                    )));
+                    return Err(de::Error::custom(
+                        BloomFilterSerDesError::MemoryLayoutMismatch(
+                            type_memory_width,
+                            std::mem::size_of::<T>() as u8,
+                        ),
+                    ));
                 }
 
                 let hash_count = seq
@@ -116,7 +118,7 @@ where
                 let bit_array = seq
                     .next_element()?
                     .ok_or_else(|| de::Error::invalid_length(3, &self))?;
-                BloomFilter::new(fp_prob, hash_count, bit_array).map_err(de::Error::custom)
+                Ok(BloomFilter::new(fp_prob, hash_count, bit_array))
             }
 
             fn visit_map<V>(self, mut map: V) -> Result<BloomFilter<T>, V::Error>
@@ -135,11 +137,12 @@ where
                             }
                             type_memory_width = Some(map.next_value()?);
                             if type_memory_width.unwrap() != std::mem::size_of::<T>() as u8 {
-                                return Err(de::Error::custom(format!(
-                                    "Mismatched type memory width: expected {}, found {:?}",
-                                    std::mem::size_of::<T>(),
-                                    type_memory_width.unwrap()
-                                )));
+                                return Err(de::Error::custom(
+                                    BloomFilterSerDesError::MemoryLayoutMismatch(
+                                        type_memory_width.unwrap(),
+                                        std::mem::size_of::<T>() as u8,
+                                    ),
+                                ));
                             }
                         }
                         Field::HashCount => {
@@ -168,12 +171,11 @@ where
                     return Err(de::Error::missing_field("type_memory_width"));
                 }
 
-                BloomFilter::new(
+                Ok(BloomFilter::new(
                     fp_prob.ok_or_else(|| de::Error::missing_field("fp_prob"))?,
                     hash_count.ok_or_else(|| de::Error::missing_field("hash_count"))?,
                     bit_array.ok_or_else(|| de::Error::missing_field("bit_array"))?,
-                )
-                .map_err(de::Error::custom)
+                ))
             }
         }
 

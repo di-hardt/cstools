@@ -1,11 +1,11 @@
 use std::cell::Cell;
 use std::sync::atomic::{AtomicU16, AtomicU32, AtomicU64, AtomicU8, AtomicUsize};
 
-use anyhow::{bail, Result};
 use bitvec::boxed::BitBox;
 use bitvec::order::Msb0;
 use bitvec::store::BitStore;
 
+use crate::bloom_filter::error::{BloomFilterHdf5Error, BloomFilterSerDesError};
 use crate::bloom_filter::BloomFilter;
 
 /// Trait for converting bit storage types to bytes
@@ -99,33 +99,30 @@ where
     /// # Arguments
     /// * `path` - Path to hdf5 file
     ///
-    pub fn load_hdf5(path: &std::path::PathBuf) -> Result<Self> {
+    pub fn load_hdf5(path: &std::path::PathBuf) -> Result<Self, BloomFilterHdf5Error> {
         use bitvec::{order::Msb0, vec::BitVec};
 
         let file = hdf5::File::open(path)?;
         let type_memory_width = file.dataset("type_memory_width")?.read_scalar::<u8>()?;
         if type_memory_width as usize != std::mem::size_of::<T>() {
-            bail!(
-                "Saved memory width {} does not match the requested type's memory width {}",
+            return Err(BloomFilterSerDesError::MemoryLayoutMismatch(
                 type_memory_width,
-                std::mem::size_of::<T>()
-            );
+                std::mem::size_of::<T>() as u8,
+            )
+            .into());
         }
         let hash_count = file.dataset("hash_count")?.read_scalar::<u32>()?;
         let fp_prob = file.dataset("fp_prob")?.read_scalar::<f64>()?;
-        let bytes = match Self::decode_hex(
+        let bytes = Self::decode_hex(
             file.dataset("bit_array")?
                 .read_scalar::<hdf5::types::VarLenAscii>()?
                 .as_str(),
-        ) {
-            Ok(bytes) => bytes,
-            Err(err) => bail!(format!("Error while decoding hex: {}", err)),
-        };
-        Self::new(
+        )?;
+        Ok(Self::new(
             fp_prob,
             hash_count,
             BitVec::<T, Msb0>::from_slice(&bytes).into_boxed_bitslice(),
-        )
+        ))
     }
 
     /// Saves bloom filter to hdf5 file
@@ -133,7 +130,7 @@ where
     /// # Arguments
     /// * `path` - Path to hdf5 file
     ///
-    pub fn save_hdf5(&self, path: &std::path::PathBuf) -> Result<()> {
+    pub fn save_hdf5(&self, path: &std::path::PathBuf) -> Result<(), BloomFilterHdf5Error> {
         let file = hdf5::File::create(path)?;
         file.new_dataset::<u8>()
             .create("type_memory_width")?
@@ -145,14 +142,14 @@ where
             .create("fp_prob")?
             .write_scalar(&self.fp_prob)?;
         // Convert bitvec to hex string
-        let s_ascii = Self::encode_hex(&self.bitvec)
-            .iter()
-            .map(|b| format!("{:02X}", b))
-            .collect::<String>();
+        let s_ascii = Self::encode_hex(&self.bitvec);
         // Save hex string to hdf5 file
         file.new_dataset::<hdf5::types::VarLenAscii>()
             .create("bit_array")?
-            .write_scalar(&hdf5::types::VarLenAscii::from_ascii(&s_ascii)?)?;
+            .write_scalar(
+                &hdf5::types::VarLenAscii::from_ascii(&s_ascii)
+                    .map_err(BloomFilterHdf5Error::HexToVarAscii)?,
+            )?;
         Ok(())
     }
 
@@ -161,25 +158,27 @@ where
     /// # Arguments
     /// * `s` - Hex string
     ///
-    pub fn decode_hex(s: &str) -> Result<Vec<T>, core::num::ParseIntError> {
+    pub fn decode_hex(s: &str) -> Result<Vec<T>, BloomFilterHdf5Error> {
         let bytes = (0..s.len())
             .step_by(2)
             .map(|i| u8::from_str_radix(&s[i..i + 2], 16))
-            .collect::<Result<Vec<u8>, core::num::ParseIntError>>()?;
+            .collect::<Result<Vec<u8>, core::num::ParseIntError>>()
+            .map_err(BloomFilterHdf5Error::HexDecode)?;
         Ok(T::from_bytes(bytes))
     }
 
-    /// Encodes bytes to hex string
+    /// Encodes bit array to hex string
     ///
     /// # Arguments
     /// * `bit_array` - Bit array
     ///
-    pub fn encode_hex(bit_array: &BitBox<T, Msb0>) -> Vec<u8> {
+    pub fn encode_hex(bit_array: &BitBox<T, Msb0>) -> String {
         bit_array
             .as_raw_slice()
             .iter()
             .flat_map(|b| b.as_bytes())
-            .collect()
+            .map(|b| format!("{:02X}", b))
+            .collect::<String>()
     }
 }
 

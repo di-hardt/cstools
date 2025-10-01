@@ -1,3 +1,6 @@
+/// Error handling
+pub mod error;
+
 /// Implementation for HDF5 serialization and deserialization
 #[cfg(feature = "hdf5")]
 pub mod hdf5_utils;
@@ -8,9 +11,10 @@ pub mod serde_utils;
 
 use std::{f64::consts::E, io::Read};
 
-use anyhow::{bail, Result};
 use bitvec::prelude::*;
 use murmur3::murmur3_x64_128 as murmur3hash;
+
+use crate::bloom_filter::error::BloomFilterError;
 
 /// BloomFilter using murmur3 hash functions
 ///
@@ -44,15 +48,15 @@ where
     /// * `hash_count` - Number of hash functions to use
     /// * `bitvec` - Bit vector
     ///
-    pub(crate) fn new(fp_prob: f64, hash_count: u32, bitvec: BitBox<T, Msb0>) -> Result<Self> {
+    pub(crate) fn new(fp_prob: f64, hash_count: u32, bitvec: BitBox<T, Msb0>) -> Self {
         let length = bitvec.len() as u128;
 
-        Ok(Self {
+        Self {
             fp_prob,
             hash_count,
             length,
             bitvec,
-        })
+        }
     }
 
     /// Get false positive probability
@@ -92,9 +96,16 @@ where
     /// * `number_of_item` - Number of items expected to be stored in the bloom filter
     /// * `fp_prob` - False Positive probability in decimal
     ///
-    pub fn new_by_item_count_and_fp_prob(number_of_item: u64, fp_prob: f64) -> Result<Self> {
+    pub fn new_by_item_count_and_fp_prob(
+        number_of_item: u64,
+        fp_prob: f64,
+    ) -> Result<Self, BloomFilterError> {
         // length of bit array to use
         let length = Self::calc_length(number_of_item, fp_prob);
+
+        if length == 0 {
+            return Err(BloomFilterError::LengthZero);
+        }
 
         // Number of hash functions to use
         let hash_count = Self::calc_hash_count(length, number_of_item)?;
@@ -102,7 +113,7 @@ where
         // Bit array of given size
         let bitvec = bitvec!(T, Msb0; 0; length as usize);
 
-        Self::new(fp_prob, hash_count, bitvec.into_boxed_bitslice())
+        Ok(Self::new(fp_prob, hash_count, bitvec.into_boxed_bitslice()))
     }
 
     /// Creates a bloom filter with the given size and false positive probability
@@ -111,15 +122,19 @@ where
     /// * `length` - Length of the bloom filter
     /// * `fp_prob` - False Positive probability in decimal
     ///
-    pub fn new_by_length_and_fp_prob(length: u64, fp_prob: f64) -> Result<Self> {
+    pub fn new_by_length_and_fp_prob(length: u64, fp_prob: f64) -> Result<Self, BloomFilterError> {
         let rounded_length = Self::round_to_t(length);
+
+        if rounded_length == 0 {
+            return Err(BloomFilterError::LengthZero);
+        }
 
         let (_, hash_count) = Self::calc_item_size_and_hash_count(rounded_length, fp_prob);
 
         // Bit array of given size
         let bitvec = bitvec!(T, Msb0; 0; rounded_length as usize);
 
-        Self::new(fp_prob, hash_count, bitvec.into_boxed_bitslice())
+        Ok(Self::new(fp_prob, hash_count, bitvec.into_boxed_bitslice()))
     }
 
     /// Calculates the strings position within the bitvecotor
@@ -128,11 +143,12 @@ where
     /// * `item` - Item to calculate position for
     /// * `seed` - Seed to use for murmur3 hash
     ///
-    fn calc_item_position<I>(&self, item: &mut I, seed: u32) -> Result<usize>
+    fn calc_item_position<I>(&self, item: &mut I, seed: u32) -> Result<usize, BloomFilterError>
     where
         I: Read,
     {
-        Ok((murmur3hash(item, seed)? % self.length) as usize)
+        let hash = murmur3hash(item, seed).map_err(BloomFilterError::Hashing)?;
+        Ok((hash % self.length) as usize)
     }
 
     /// Add an item to the filter
@@ -141,7 +157,7 @@ where
     ///
     /// * `item` - Item to add
     ///
-    pub fn add<I>(&mut self, item: &mut I) -> Result<()>
+    pub fn add<I>(&mut self, item: &mut I) -> Result<(), BloomFilterError>
     where
         I: Read,
     {
@@ -160,7 +176,7 @@ where
     /// # Arguments
     /// * `item` - Item to search
     ///
-    pub fn contains<I>(&self, item: &mut I) -> Result<bool>
+    pub fn contains<I>(&self, item: &mut I) -> Result<bool, BloomFilterError>
     where
         I: Read,
     {
@@ -198,10 +214,10 @@ where
     /// * `m` - Length of bit array
     /// * `n` - Number of items expected to be stored in filter
     ///
-    pub fn calc_hash_count(m: u64, n: u64) -> Result<u32> {
+    pub fn calc_hash_count(m: u64, n: u64) -> Result<u32, BloomFilterError> {
         let k = ((m as f64) / (n as f64)) * 2.0_f64.log(E);
         if k > u32::MAX as f64 {
-            bail!("Hash count is too large");
+            return Err(BloomFilterError::HashCountTooLarge);
         }
         Ok(k as u32)
     }
@@ -252,7 +268,7 @@ where
     ///
     /// * `item` - Item to add
     ///
-    pub fn add_aliased<I>(&self, item: &mut I) -> Result<()>
+    pub fn add_aliased<I>(&self, item: &mut I) -> Result<(), BloomFilterError>
     where
         I: Read,
     {
