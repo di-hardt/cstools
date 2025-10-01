@@ -116,7 +116,7 @@ where
         fp_prob: f64,
     ) -> Result<Self, BloomFilterError> {
         // length of bit array to use
-        let length = Self::calc_length(number_of_item, fp_prob);
+        let length = Self::calc_length_rounded(number_of_item, fp_prob);
 
         if length == 0 {
             return Err(BloomFilterError::LengthZero);
@@ -139,7 +139,7 @@ where
     /// Creates a bloom filter with the given size and false positive probability
     ///
     /// # Arguments
-    /// * `length` - Length of the bloom filter
+    /// * `length` - Length of the bloom filter in bits
     /// * `fp_prob` - False Positive probability in decimal
     ///
     pub fn new_by_length_and_fp_prob(length: u64, fp_prob: f64) -> Result<Self, BloomFilterError> {
@@ -217,7 +217,23 @@ where
 
     /// Calculates the length of the bit array `m` using
     /// the following formula
-    /// m = -(n * lg(p)) / (lg(2)^2)
+    /// m = ceil((n * log(p)) / log(1 / pow(2, log(2))));
+    ///
+    /// # Arguments
+    ///
+    /// `n` - Number of items expected to be stored in filter
+    /// `p` - False Positive probability in decimal
+    ///
+    pub fn calc_length(n: u64, p: f64) -> u64 {
+        ((n as f64 * p.log(E)) // (n * log(p))
+            /
+            (1.0_f64 / 2.0_f64.powf(2.0_f64.log(E))).log(E))
+        .ceil() as u64
+    }
+
+    /// Calculates the length of the bit array `m` using
+    /// the following formula
+    /// m = ceil((n * log(p)) / log(1 / pow(2, log(2))));
     ///
     /// Rounded up to nearest multiple of T
     ///
@@ -226,9 +242,8 @@ where
     /// `n` - Number of items expected to be stored in filter
     /// `p` - False Positive probability in decimal
     ///
-    pub fn calc_length(n: u64, p: f64) -> u64 {
-        let m = (-(n as f64 * p.log(E)) / (2.0_f64.log(E).powi(2))) as u64;
-        Self::round_to_t(m)
+    pub fn calc_length_rounded(n: u64, p: f64) -> u64 {
+        Self::round_to_t(Self::calc_length(n, p))
     }
 
     /// Calculates the number of hash function `k` to apply when checking for an item, using
@@ -241,11 +256,25 @@ where
     /// * `n` - Number of items expected to be stored in filter
     ///
     pub fn calc_hash_count(m: u64, n: u64) -> Result<u32, BloomFilterError> {
-        let k = ((m as f64) / (n as f64)) * 2.0_f64.log(E);
+        let k = (((m as f64) / (n as f64)) * 2.0_f64.log(E)).round();
         if k > u32::MAX as f64 {
             return Err(BloomFilterError::HashCountTooLarge);
         }
         Ok(k as u32)
+    }
+
+    /// Calculates the maximum number of items `n` the filter can hold
+    ///
+    /// ceil(m / (-k / log(1 - exp(log(p) / k))))
+    ///
+    /// # Arguments
+    /// * `m` - Length of bit array
+    /// * `k` - Number of hash functions to use
+    /// * `p` - False Positive probability
+    ///
+    pub fn calc_number_of_items(m: u64, k: u32, p: f64) -> u64 {
+        let k_float = k as f64;
+        (m as f64 / (-(k_float) / (1.0_f64 - (p.log(E) / k_float).exp()).log(E))).ceil() as u64
     }
 
     /// Calculates item size and hash count
@@ -256,21 +285,23 @@ where
     /// * `fp_prob` - False Positive probability in decimal
     ///
     pub fn calc_item_size_and_hash_count(size: u64, fp_prob: f64) -> (u64, u32) {
-        let size_f = size as f64;
-        let mut item_size: u64 = 0;
-        for i in 1..=u32::MAX {
-            let i_f = i as f64;
-            let temp_item_size =
-                (size_f / (-i_f / (1_f64 - (fp_prob.ln() / i_f).exp()).ln())).ceil() as u64;
-            if item_size > temp_item_size {
-                return (item_size, i - 1);
+        let mut number_of_items: u64 = 0;
+        for k in 1..=u32::MAX {
+            let temp_item_size = Self::calc_number_of_items(size, k, fp_prob); // ceil(m / (-k / log(1 - exp(log(p) / k))))
+            if number_of_items > temp_item_size {
+                return (number_of_items, k - 1);
             } else {
-                item_size = temp_item_size;
+                number_of_items = temp_item_size;
             }
         }
-        (item_size, u32::MAX)
+        (number_of_items, u32::MAX)
     }
 
+    /// Rounds the given length to the nearest multiple of T (size of the BitStore type in bits)
+    ///
+    /// # Arguments
+    /// * `length` - Length to round
+    ///   
     pub fn round_to_t(length: u64) -> u64 {
         let remains = length % (std::mem::size_of::<T>() * 8) as u64;
         if remains == 0 {
@@ -428,6 +459,64 @@ mod tests {
                 .contains(&mut Cursor::new(a_string.as_bytes()))
                 .unwrap());
         }
+    }
+
+    #[test]
+    fn test_rounding() {
+        assert_eq!(BloomFilter::<u8>::round_to_t(1), 8);
+        assert_eq!(BloomFilter::<u8>::round_to_t(7), 8);
+        assert_eq!(BloomFilter::<u8>::round_to_t(8), 8);
+        assert_eq!(BloomFilter::<u8>::round_to_t(9), 16);
+
+        assert_eq!(BloomFilter::<u16>::round_to_t(1), 16);
+        assert_eq!(BloomFilter::<u16>::round_to_t(15), 16);
+        assert_eq!(BloomFilter::<u16>::round_to_t(16), 16);
+        assert_eq!(BloomFilter::<u16>::round_to_t(17), 32);
+
+        assert_eq!(BloomFilter::<u32>::round_to_t(1), 32);
+        assert_eq!(BloomFilter::<u32>::round_to_t(31), 32);
+        assert_eq!(BloomFilter::<u32>::round_to_t(32), 32);
+        assert_eq!(BloomFilter::<u32>::round_to_t(33), 64);
+
+        assert_eq!(BloomFilter::<u64>::round_to_t(1), 64);
+        assert_eq!(BloomFilter::<u64>::round_to_t(63), 64);
+        assert_eq!(BloomFilter::<u64>::round_to_t(64), 64);
+        assert_eq!(BloomFilter::<u64>::round_to_t(65), 128);
+
+        assert_eq!(
+            BloomFilter::<usize>::round_to_t(1),
+            std::mem::size_of::<usize>() as u64 * 8
+        );
+        assert_eq!(
+            BloomFilter::<usize>::round_to_t(63),
+            std::mem::size_of::<usize>() as u64 * 8
+        );
+        assert_eq!(
+            BloomFilter::<usize>::round_to_t(64),
+            std::mem::size_of::<usize>() as u64 * 8
+        );
+        assert_eq!(
+            BloomFilter::<usize>::round_to_t(65),
+            std::mem::size_of::<usize>() as u64 * 8 * 2
+        );
+    }
+
+    /// Test calculation of length
+    #[test]
+    fn test_calc_length() {
+        let length = BloomFilter::<u8>::calc_length(80_000_000, 0.001);
+        assert_eq!(length, 1150207006);
+        assert_ne!(length % 8, 0);
+
+        let length_rounded = BloomFilter::<u8>::calc_length_rounded(80_000_000, 0.001);
+        assert_eq!(length_rounded % 8, 0)
+    }
+
+    #[test]
+    fn test_calc_hash_count() {
+        let length = BloomFilter::<u8>::calc_length(80_000_000, 0.001);
+        let hash_count = BloomFilter::<u8>::calc_hash_count(length, 80_000_000).unwrap();
+        assert_eq!(hash_count, 10);
     }
 
     /// Test display implementation
