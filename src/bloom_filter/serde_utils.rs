@@ -16,10 +16,11 @@ where
     where
         S: Serializer,
     {
-        let mut state = serializer.serialize_struct("BloomFilter", 4)?;
+        let mut state = serializer.serialize_struct("BloomFilter", 5)?;
         state.serialize_field("type_memory_width", &std::mem::size_of::<T>())?;
         state.serialize_field("hash_count", &self.hash_count())?;
         state.serialize_field("fp_prob", &self.fp_prob)?;
+        state.serialize_field("number_of_items", &self.number_of_items)?;
         state.serialize_field("bit_array", &self.bitvec)?;
         state.end()
     }
@@ -38,6 +39,7 @@ where
             TypeMemoryWidth,
             HashCount,
             FpProb,
+            NumberOfItems,
             BitArray,
         }
         impl<'de> Deserialize<'de> for Field {
@@ -52,7 +54,7 @@ where
 
                     fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
                         formatter.write_str(
-                            "`type_memory_width`, `hash_count`, `fp_prob` or `bit_array`",
+                            "`type_memory_width`, `hash_count`, `fp_prob`, `number_of_items`, or `bit_array`",
                         )
                     }
 
@@ -64,6 +66,7 @@ where
                             "type_memory_width" => Ok(Field::TypeMemoryWidth),
                             "hash_count" => Ok(Field::HashCount),
                             "fp_prob" => Ok(Field::FpProb),
+                            "number_of_items" => Ok(Field::NumberOfItems),
                             "bit_array" => Ok(Field::BitArray),
                             _ => Err(de::Error::unknown_field(value, FIELDS)),
                         }
@@ -115,10 +118,18 @@ where
                 let fp_prob = seq
                     .next_element()?
                     .ok_or_else(|| de::Error::invalid_length(2, &self))?;
-                let bit_array = seq
+                let number_of_items = seq
                     .next_element()?
                     .ok_or_else(|| de::Error::invalid_length(3, &self))?;
-                Ok(BloomFilter::new(fp_prob, hash_count, bit_array))
+                let bit_array = seq
+                    .next_element()?
+                    .ok_or_else(|| de::Error::invalid_length(4, &self))?;
+                Ok(BloomFilter::new(
+                    fp_prob,
+                    hash_count,
+                    number_of_items,
+                    bit_array,
+                ))
             }
 
             fn visit_map<V>(self, mut map: V) -> Result<BloomFilter<T>, V::Error>
@@ -128,6 +139,7 @@ where
                 let mut type_memory_width: Option<u8> = None;
                 let mut hash_count = None;
                 let mut fp_prob = None;
+                let mut number_of_items = None;
                 let mut bit_array = None;
                 while let Some(key) = map.next_key()? {
                     match key {
@@ -159,6 +171,13 @@ where
                             fp_prob = Some(map.next_value()?);
                         }
 
+                        Field::NumberOfItems => {
+                            if number_of_items.is_some() {
+                                return Err(de::Error::duplicate_field("number_of_items"));
+                            }
+                            number_of_items = Some(map.next_value()?);
+                        }
+
                         Field::BitArray => {
                             if bit_array.is_some() {
                                 return Err(de::Error::duplicate_field("bit_array"));
@@ -174,12 +193,19 @@ where
                 Ok(BloomFilter::new(
                     fp_prob.ok_or_else(|| de::Error::missing_field("fp_prob"))?,
                     hash_count.ok_or_else(|| de::Error::missing_field("hash_count"))?,
+                    number_of_items.ok_or_else(|| de::Error::missing_field("number_of_items"))?,
                     bit_array.ok_or_else(|| de::Error::missing_field("bit_array"))?,
                 ))
             }
         }
 
-        const FIELDS: &[&str] = &["type_memory_width", "hash_count", "fp_prob", "bit_array"];
+        const FIELDS: &[&str] = &[
+            "type_memory_width",
+            "hash_count",
+            "fp_prob",
+            "number_of_items",
+            "bit_array",
+        ];
         deserializer.deserialize_struct(
             "Duration",
             FIELDS,

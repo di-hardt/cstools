@@ -29,7 +29,10 @@ where
     /// Length of the bloom filter as u128 fosr position calculation
     pub(crate) length: u128,
 
-    // Number of hash functions to apply
+    /// Number of items the filter is designed to hold
+    pub(crate) number_of_items: u64,
+
+    /// Number of hash functions to apply
     pub(crate) hash_count: u32,
 
     // Bit vector
@@ -48,12 +51,18 @@ where
     /// * `hash_count` - Number of hash functions to use
     /// * `bitvec` - Bit vector
     ///
-    pub(crate) fn new(fp_prob: f64, hash_count: u32, bitvec: BitBox<T, Msb0>) -> Self {
+    pub(crate) fn new(
+        fp_prob: f64,
+        hash_count: u32,
+        number_of_items: u64,
+        bitvec: BitBox<T, Msb0>,
+    ) -> Self {
         let length = bitvec.len() as u128;
 
         Self {
             fp_prob,
             hash_count,
+            number_of_items,
             length,
             bitvec,
         }
@@ -63,6 +72,12 @@ where
     ///
     pub fn fp_prob(&self) -> f64 {
         self.fp_prob
+    }
+
+    /// Number of items the filter is designed to hold
+    ///
+    pub fn number_of_items(&self) -> u64 {
+        self.number_of_items
     }
 
     /// Size of bit vec in bytes
@@ -113,7 +128,12 @@ where
         // Bit array of given size
         let bitvec = bitvec!(T, Msb0; 0; length as usize);
 
-        Ok(Self::new(fp_prob, hash_count, bitvec.into_boxed_bitslice()))
+        Ok(Self::new(
+            fp_prob,
+            hash_count,
+            number_of_item,
+            bitvec.into_boxed_bitslice(),
+        ))
     }
 
     /// Creates a bloom filter with the given size and false positive probability
@@ -129,12 +149,18 @@ where
             return Err(BloomFilterError::LengthZero);
         }
 
-        let (_, hash_count) = Self::calc_item_size_and_hash_count(rounded_length, fp_prob);
+        let (number_of_items, hash_count) =
+            Self::calc_item_size_and_hash_count(rounded_length, fp_prob);
 
         // Bit array of given size
         let bitvec = bitvec!(T, Msb0; 0; rounded_length as usize);
 
-        Ok(Self::new(fp_prob, hash_count, bitvec.into_boxed_bitslice()))
+        Ok(Self::new(
+            fp_prob,
+            hash_count,
+            number_of_items,
+            bitvec.into_boxed_bitslice(),
+        ))
     }
 
     /// Calculates the strings position within the bitvecotor

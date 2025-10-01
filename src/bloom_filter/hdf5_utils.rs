@@ -113,6 +113,7 @@ where
         }
         let hash_count = file.dataset("hash_count")?.read_scalar::<u32>()?;
         let fp_prob = file.dataset("fp_prob")?.read_scalar::<f64>()?;
+        let number_of_items = file.dataset("number_of_items")?.read_scalar::<u64>()?;
         let bytes = Self::decode_hex(
             file.dataset("bit_array")?
                 .read_scalar::<hdf5::types::VarLenAscii>()?
@@ -121,6 +122,7 @@ where
         Ok(Self::new(
             fp_prob,
             hash_count,
+            number_of_items,
             BitVec::<T, Msb0>::from_slice(&bytes).into_boxed_bitslice(),
         ))
     }
@@ -141,6 +143,9 @@ where
         file.new_dataset::<f64>()
             .create("fp_prob")?
             .write_scalar(&self.fp_prob)?;
+        file.new_dataset::<u64>()
+            .create("number_of_items")?
+            .write_scalar(&self.number_of_items)?;
         // Convert bitvec to hex string
         let s_ascii = Self::encode_hex(&self.bitvec);
         // Save hex string to hdf5 file
