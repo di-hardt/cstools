@@ -1,3 +1,11 @@
+/// Implementation for HDF5 serialization and deserialization
+#[cfg(feature = "hdf5")]
+pub mod hdf5_utils;
+
+/// Implementation for Serde serialization and deserialization
+#[cfg(feature = "serde")]
+pub mod serde_utils;
+
 use std::{f64::consts::E, io::Read};
 
 use anyhow::{bail, Result};
