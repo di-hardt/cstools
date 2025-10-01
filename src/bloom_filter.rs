@@ -61,13 +61,13 @@ where
 
     /// Get false positive probability
     ///
-    pub fn get_fp_prob(&self) -> f64 {
+    pub fn fp_prob(&self) -> f64 {
         self.fp_prob
     }
 
     /// Size of bit vec in bytes
     ///
-    pub fn get_size(&self) -> usize {
+    pub fn size(&self) -> usize {
         self.bitvec.len() / 8
     }
 
