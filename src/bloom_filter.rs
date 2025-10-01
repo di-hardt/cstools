@@ -9,7 +9,7 @@ pub mod hdf5_utils;
 #[cfg(feature = "serde")]
 pub mod serde_utils;
 
-use std::{f64::consts::E, io::Read};
+use std::{f64::consts::E, fmt::Display, io::Read};
 
 use bitvec::prelude::*;
 use murmur3::murmur3_x64_128 as murmur3hash;
@@ -309,6 +309,22 @@ where
     }
 }
 
+impl<T> Display for BloomFilter<T>
+where
+    T: BitStore,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "BloomFilter(designed for {} items, size {} bytes, false positive probability {}, using {} hash functions)",
+            self.number_of_items,
+            self.size(),
+            self.fp_prob,
+            self.hash_count
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::cell::Cell;
@@ -412,5 +428,14 @@ mod tests {
                 .contains(&mut Cursor::new(a_string.as_bytes()))
                 .unwrap());
         }
+    }
+
+    /// Test display implementation
+    #[test]
+    fn test_dispaly() {
+        let bloom_filter: BloomFilter<u8> =
+            BloomFilter::new_by_item_count_and_fp_prob(1000, 0.01).unwrap();
+        let display = format!("{}", bloom_filter);
+        assert_eq!(display, "BloomFilter(designed for 1000 items, size 1199 bytes, false positive probability 0.01, using 6 hash functions)");
     }
 }
