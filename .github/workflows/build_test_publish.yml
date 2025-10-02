@@ -3,7 +3,7 @@ name: Rust
 on:
   push:
     tags:
-      - '[0-9]+.[0-9]+.[0-9]+'
+      - 'release[0-9]+.[0-9]+.[0-9]+'
   pull_request:
     branches:
       - main
@@ -12,7 +12,7 @@ env:
   CARGO_TERM_COLOR: always
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
@@ -21,8 +21,29 @@ jobs:
     steps:
       - uses: actions/checkout@v3
 
+      - run: git checkout test
+
       - name: Install dependencies
-        run: sudo apt-get install -y libhdf5-dev libssl-dev pkg-config
+        run: |
+          sudo apt-get -qq update -y
+          sudo apt-get install -y libhdf5-dev libssl-dev pkg-config
+
+      - name: Set plain version tag
+        run: |
+          TAG=${{ github.ref_name }}
+          echo "PLAIN_REF_NAME=${TAG:7}" >> $GITHUB_ENV
+
+      - name: Remove temporary tag
+        if: github.event_name != 'pull_request'
+        run: |
+          git config --global user.name "GitHub Actions"
+          git config --global user.email "di-hardt@users.noreply.github.com"
+          git tag -d ${{ github.ref_name }}
+          git push origin ${{ github.ref_name }} --delete
+
+      - name: Set version
+        run: |
+          sed -i "s;^version =.*;version = \"${PLAIN_REF_NAME}\";g" Cargo.toml
 
       - name: Set up Rust
         uses: actions-rs/toolchain@v1
@@ -46,8 +67,23 @@ jobs:
           command: test
           args: --release --verbose --all-features
 
-      - name: Publish
+      - name: Commit and push release commit and tag
+        id: release
         if: steps.test.outcome == 'success' && github.event_name != 'pull_request'
+        run: |
+          # Set up git
+          git config --global user.name "GitHub Actions"
+          git config --global user.email "di-hardt@users.noreply.github.com"
+          # Commit and push changes and tag
+          git add Cargo.toml Cargo.lock
+          git commit -m "release ${PLAIN_REF_NAME}"
+          git tag -a ${PLAIN_REF_NAME} -m "version ${PLAIN_REF_NAME}"
+          git push origin main
+          git push origin ${PLAIN_REF_NAME}
+          git push origin ${{ github.ref_name }} --delete
+
+      - name: Publish
+        if: steps.release.outcome == 'success' && github.event_name != 'pull_request'
         run : cargo publish --token ${CRATESIO_TOKEN}
         env:
           CRATESIO_TOKEN: ${{ secrets.CRATESIO_TOKEN }}
