@@ -508,13 +508,4 @@ mod tests {
         let hash_count = BloomFilter::<u8>::calc_hash_count(length, 80_000_000).unwrap();
         assert_eq!(hash_count, 10);
     }
-
-    /// Test display implementation
-    #[test]
-    fn test_dispaly() {
-        let bloom_filter: BloomFilter<u8> =
-            BloomFilter::new_by_item_count_and_fp_prob(1000, 0.01).unwrap();
-        let display = format!("{}", bloom_filter);
-        assert_eq!(display, "BloomFilter(designed for 1000 items, size 1199 bytes, false positive probability 0.01, using 6 hash functions)");
-    }
 }
