@@ -1,9 +1,9 @@
 use std::cell::Cell;
 use std::sync::atomic::{AtomicU16, AtomicU32, AtomicU64, AtomicU8, AtomicUsize};
 
-use bitvec::boxed::BitBox;
 use bitvec::order::Msb0;
 use bitvec::store::BitStore;
+use bitvec::vec::BitVec;
 
 use crate::bloom_filter::error::{BloomFilterHdf5Error, BloomFilterSerDesError};
 use crate::bloom_filter::BloomFilter;
@@ -123,7 +123,7 @@ where
             fp_prob,
             hash_count,
             number_of_items,
-            BitVec::<T, Msb0>::from_slice(&bytes).into_boxed_bitslice(),
+            BitVec::<T, Msb0>::from_slice(&bytes),
         ))
     }
 
@@ -177,7 +177,7 @@ where
     /// # Arguments
     /// * `bit_array` - Bit array
     ///
-    pub fn encode_hex(bit_array: &BitBox<T, Msb0>) -> String {
+    pub fn encode_hex(bit_array: &BitVec<T, Msb0>) -> String {
         bit_array
             .as_raw_slice()
             .iter()

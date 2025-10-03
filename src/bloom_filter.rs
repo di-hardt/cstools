@@ -36,7 +36,7 @@ where
     pub(crate) hash_count: u32,
 
     // Bit vector
-    pub(crate) bitvec: BitBox<T, Msb0>,
+    pub(crate) bitvec: BitVec<T, Msb0>,
 }
 
 impl<T> BloomFilter<T>
@@ -55,7 +55,7 @@ where
         fp_prob: f64,
         hash_count: u32,
         number_of_items: u64,
-        bitvec: BitBox<T, Msb0>,
+        bitvec: BitVec<T, Msb0>,
     ) -> Self {
         let length = bitvec.len() as u128;
 
@@ -94,7 +94,7 @@ where
 
     /// Get bit vector
     ///
-    pub fn bitvec(&self) -> &BitBox<T, Msb0> {
+    pub fn bitvec(&self) -> &BitVec<T, Msb0> {
         &self.bitvec
     }
 
@@ -128,12 +128,7 @@ where
         // Bit array of given size
         let bitvec = bitvec!(T, Msb0; 0; length as usize);
 
-        Ok(Self::new(
-            fp_prob,
-            hash_count,
-            number_of_item,
-            bitvec.into_boxed_bitslice(),
-        ))
+        Ok(Self::new(fp_prob, hash_count, number_of_item, bitvec))
     }
 
     /// Creates a bloom filter with the given size and false positive probability
@@ -155,12 +150,7 @@ where
         // Bit array of given size
         let bitvec = bitvec!(T, Msb0; 0; rounded_length as usize);
 
-        Ok(Self::new(
-            fp_prob,
-            hash_count,
-            number_of_items,
-            bitvec.into_boxed_bitslice(),
-        ))
+        Ok(Self::new(fp_prob, hash_count, number_of_items, bitvec))
     }
 
     /// Calculates the strings position within the bitvecotor
