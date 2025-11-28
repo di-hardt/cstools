@@ -112,15 +112,17 @@ where
             .into());
         }
         let hash_count = file.dataset("hash_count")?.read_scalar::<u32>()?;
-        let fp_prob = file.dataset("fp_prob")?.read_scalar::<f64>()?;
+        let false_positive_probability = file
+            .dataset("false_positive_probability")?
+            .read_scalar::<f64>()?;
         let number_of_items = file.dataset("number_of_items")?.read_scalar::<u64>()?;
         let bytes = Self::decode_hex(
             file.dataset("bit_array")?
                 .read_scalar::<hdf5::types::VarLenAscii>()?
                 .as_str(),
         )?;
-        Ok(Self::new(
-            fp_prob,
+        Ok(Self::new_with_bitvec(
+            false_positive_probability,
             hash_count,
             number_of_items,
             BitVec::<T, Msb0>::from_slice(&bytes),
@@ -141,8 +143,8 @@ where
             .create("hash_count")?
             .write_scalar(&self.hash_count)?;
         file.new_dataset::<f64>()
-            .create("fp_prob")?
-            .write_scalar(&self.fp_prob)?;
+            .create("false_positive_probability")?
+            .write_scalar(&self.false_positive_probability)?;
         file.new_dataset::<u64>()
             .create("number_of_items")?
             .write_scalar(&self.number_of_items)?;
@@ -225,8 +227,10 @@ mod tests {
                 .map(String::from)
                 .collect();
 
-        let mut bloom_filter: BloomFilter<T> =
-            BloomFilter::new_by_item_count_and_fp_prob(some_strings.len() as u64, 0.01).unwrap();
+        let mut bloom_filter = BloomFilter::<T>::build()
+            .with_number_of_items(some_strings.len() as u64)
+            .with_false_positive_probability(0.01)
+            .unwrap();
 
         for a_string in some_strings.iter() {
             bloom_filter
@@ -245,7 +249,10 @@ mod tests {
 
         assert_eq!(bloom_filter.len(), read_bloom_filter.len());
         assert_eq!(bloom_filter.hash_count, read_bloom_filter.hash_count);
-        assert_eq!(bloom_filter.fp_prob, read_bloom_filter.fp_prob);
+        assert_eq!(
+            bloom_filter.false_positive_probability,
+            read_bloom_filter.false_positive_probability
+        );
         assert_eq!(bloom_filter.bitvec, read_bloom_filter.bitvec);
 
         for a_string in some_strings.iter() {

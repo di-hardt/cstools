@@ -9,12 +9,338 @@ pub mod hdf5_utils;
 #[cfg(feature = "serde")]
 pub mod serde_utils;
 
-use std::{f64::consts::E, fmt::Display, io::Read};
+use std::{fmt::Display, io::Read};
 
 use bitvec::prelude::*;
 use murmur3::murmur3_x64_128 as murmur3hash;
 
 use crate::bloom_filter::error::BloomFilterError;
+
+pub trait IsBuilder<T>
+where
+    T: BitStore,
+{
+    /// Calculates the length of the bit array `m`
+    ///
+    /// $$ m = -\frac{n ln(p)}{ln(2)^2}  $$
+    ///
+    /// # Arguments
+    ///
+    /// `n` - Number of items expected to be stored in filter
+    /// `p` - False Positive probability in decimal
+    ///
+    fn calc_length(n: u64, p: f64) -> u64 {
+        let n = n as f64;
+        -((n * p.ln()) / 2_f64.ln().powf(2.0)).ceil() as u64
+    }
+
+    /// Calculates the false positive probability `f` using
+    /// the following formula
+    ///
+    /// $$ (1 − e^(−kn/m))^k $$
+    ///
+    /// # Arguments
+    ///
+    /// * `m` - Length of bit array
+    /// * `n` - Number of items expected to be stored in filter
+    /// * `k` - Number of hash functions to use
+    ///
+    fn calc_false_positive_prob(m: u64, n: u64, k: u32) -> f64 {
+        let k = k as f64;
+        let n = n as f64;
+        let m = m as f64;
+
+        (1.0 - ((-k * n) / m).exp()).powf(k)
+    }
+
+    /// Calculates the number of hash function `k` to apply when checking for an item, using
+    /// following formula
+    ///  $$ k = \frac{m}{n} * ln(2) $$
+    ///
+    /// # Arguments
+    ///
+    /// * `m` - Length of bit array
+    /// * `n` - Number of items expected to be stored in filter
+    ///
+    fn calc_hash_count(m: u64, n: u64) -> Result<u32, BloomFilterError> {
+        let m = m as f64;
+        let n = n as f64;
+
+        let k = ((m / n) * 2.0_f64.ln()).round();
+        if k > u32::MAX as f64 {
+            return Err(BloomFilterError::HashCountTooLarge);
+        }
+        Ok(k as u32)
+    }
+
+    /// Calculates the maximum number of items `n` the filter can hold
+    ///
+    /// $$ n = -\frac{m * ln(2)^2}{ln(p)} $$
+    ///
+    /// # Arguments
+    /// * `m` - Length of bit array
+    /// * `p` - False Positive probability
+    ///
+    fn calc_number_of_items(m: u64, p: f64) -> u64 {
+        let m = m as f64;
+        -((m * 2_f64.ln().powf(2.0)) / p.ln()).ceil() as u64
+    }
+
+    /// Rounds the given length to the nearest multiple of T (size of the BitStore type in bits)
+    ///
+    /// # Arguments
+    /// * `length` - Length to round
+    ///   
+    fn round_to_t(length: u64) -> u64 {
+        let remains = length % (std::mem::size_of::<T>() * 8) as u64;
+        if remains == 0 {
+            length
+        } else {
+            length + (std::mem::size_of::<T>() * 8) as u64 - remains
+        }
+    }
+}
+
+pub struct Builder<T>
+where
+    T: BitStore,
+{
+    phantom: std::marker::PhantomData<T>,
+}
+
+impl<T> Builder<T>
+where
+    T: BitStore,
+{
+    pub fn with_false_positive_probability(
+        self,
+        false_positive_probability: f64,
+    ) -> FalsePositiveProbabilityBuilder<T> {
+        FalsePositiveProbabilityBuilder {
+            false_positive_probability,
+            phantom: std::marker::PhantomData,
+        }
+    }
+
+    /// Sets the number of items expected to be stored in the bloom filter
+    ///
+    /// # Arguments
+    /// * `number_of_items` - Number of items expected to be stored in filter
+    pub fn with_length(self, length: u64) -> LengthBuilder<T> {
+        LengthBuilder {
+            length,
+            phantom: std::marker::PhantomData,
+        }
+    }
+
+    /// Sets the number of items expected to be stored in the bloom filter
+    ///
+    /// # Arguments
+    /// * `number_of_items` - Number of items expected to be stored in filter
+    pub fn with_number_of_items(self, number_of_items: u64) -> NumberOfItemsBuilder<T> {
+        NumberOfItemsBuilder {
+            number_of_items,
+            phantom: std::marker::PhantomData,
+        }
+    }
+}
+
+impl<T> IsBuilder<T> for Builder<T> where T: BitStore {}
+
+pub struct FalsePositiveProbabilityBuilder<T>
+where
+    T: BitStore,
+{
+    false_positive_probability: f64,
+    phantom: std::marker::PhantomData<T>,
+}
+
+impl<T> FalsePositiveProbabilityBuilder<T>
+where
+    T: BitStore,
+{
+    /// Sets the length of the bloom filter in bits
+    ///
+    /// # Arguments
+    /// * `length` - Length of the bloom filter in bits
+    ///
+    pub fn with_length(self, length: u64) -> Result<BloomFilter<T>, BloomFilterError> {
+        if self.false_positive_probability == 0.0 {
+            return Err(BloomFilterError::FalsePositiveProbabilityOne);
+        }
+
+        if self.false_positive_probability == 1.0 {
+            return Err(BloomFilterError::FalsePositiveProbabilityOne);
+        }
+
+        if length == 0 {
+            return Err(BloomFilterError::LengthZero);
+        }
+
+        let rounded_length = Self::round_to_t(length);
+
+        let number_of_items =
+            Self::calc_number_of_items(rounded_length, self.false_positive_probability);
+
+        if number_of_items == 0 {
+            return Err(BloomFilterError::NumberOfItemsZero);
+        }
+
+        let hash_count = Self::calc_hash_count(rounded_length, number_of_items)?;
+
+        Ok(BloomFilter::new(
+            self.false_positive_probability,
+            hash_count,
+            number_of_items,
+            rounded_length,
+        ))
+    }
+
+    /// Sets the number of items expected to be stored in the bloom filter
+    ///
+    /// # Arguments
+    /// * `number_of_items` - Number of items expected to be stored in filter
+    ///
+    pub fn with_number_of_items(
+        self,
+        number_of_items: u64,
+    ) -> Result<BloomFilter<T>, BloomFilterError> {
+        if self.false_positive_probability == 1.0 {
+            return Err(BloomFilterError::FalsePositiveProbabilityOne);
+        }
+
+        if number_of_items == 0 {
+            return Err(BloomFilterError::NumberOfItemsZero);
+        }
+
+        // length of bit array to use
+        let length = Self::round_to_t(Self::calc_length(
+            number_of_items,
+            self.false_positive_probability,
+        ));
+
+        if length == 0 {
+            return Err(BloomFilterError::LengthZero);
+        }
+
+        // Number of hash functions to use
+        let hash_count = Self::calc_hash_count(length, number_of_items)?;
+
+        Ok(BloomFilter::new(
+            self.false_positive_probability,
+            hash_count,
+            number_of_items,
+            length,
+        ))
+    }
+}
+
+impl<T> IsBuilder<T> for FalsePositiveProbabilityBuilder<T> where T: BitStore {}
+
+pub struct LengthBuilder<T>
+where
+    T: BitStore,
+{
+    length: u64,
+    phantom: std::marker::PhantomData<T>,
+}
+
+impl<T> LengthBuilder<T>
+where
+    T: BitStore,
+{
+    /// Sets the false positive probability
+    ///
+    /// # Arguments
+    /// * `false_positive_probability` - False_positive_probability to use
+    ///
+    pub fn with_false_positive_probability(
+        self,
+        false_positive_probability: f64,
+    ) -> Result<BloomFilter<T>, BloomFilterError> {
+        FalsePositiveProbabilityBuilder {
+            false_positive_probability,
+            phantom: std::marker::PhantomData,
+        }
+        .with_length(self.length)
+    }
+
+    /// Sets the number of expected items
+    ///
+    /// # Arguments
+    /// * `number_of_items` - Number of expected items
+    ///
+    pub fn with_number_of_items(
+        self,
+        number_of_items: u64,
+    ) -> Result<BloomFilter<T>, BloomFilterError> {
+        if self.length == 0 {
+            return Err(BloomFilterError::LengthZero);
+        }
+
+        if number_of_items == 0 {
+            return Err(BloomFilterError::NumberOfItemsZero);
+        }
+
+        let hash_count = Self::calc_hash_count(self.length, number_of_items)?;
+
+        let false_positive_probability =
+            Self::calc_false_positive_prob(self.length, number_of_items, hash_count);
+
+        Ok(BloomFilter::new(
+            false_positive_probability,
+            hash_count,
+            number_of_items,
+            self.length,
+        ))
+    }
+}
+
+impl<T> IsBuilder<T> for LengthBuilder<T> where T: BitStore {}
+
+pub struct NumberOfItemsBuilder<T>
+where
+    T: BitStore,
+{
+    number_of_items: u64,
+    phantom: std::marker::PhantomData<T>,
+}
+
+impl<T> NumberOfItemsBuilder<T>
+where
+    T: BitStore,
+{
+    /// Sets the false positive probability in decimal
+    ///
+    /// # Arguments
+    /// * `false_positive_probability` - False Positive probability in decimal
+    ///
+    pub fn with_false_positive_probability(
+        self,
+        false_positive_probability: f64,
+    ) -> Result<BloomFilter<T>, BloomFilterError> {
+        FalsePositiveProbabilityBuilder::<T> {
+            false_positive_probability,
+            phantom: std::marker::PhantomData,
+        }
+        .with_number_of_items(self.number_of_items)
+    }
+
+    /// Sets the length of the bloom filter in bits
+    ///
+    /// # Argument
+    /// * `length` - Length of the Bloom Filter in bits
+    ///
+    pub fn with_length(self, length: u64) -> Result<BloomFilter<T>, BloomFilterError> {
+        LengthBuilder {
+            length,
+            phantom: std::marker::PhantomData,
+        }
+        .with_number_of_items(self.number_of_items)
+    }
+}
+
+impl<T> IsBuilder<T> for NumberOfItemsBuilder<T> where T: BitStore {}
 
 /// BloomFilter using murmur3 hash functions
 ///
@@ -24,7 +350,7 @@ where
     T: BitStore,
 {
     /// False positive probability
-    pub(crate) fp_prob: f64,
+    pub(crate) false_positive_probability: f64,
 
     /// Length of the bloom filter as u128 fosr position calculation
     pub(crate) length: u128,
@@ -43,16 +369,49 @@ impl<T> BloomFilter<T>
 where
     T: BitStore,
 {
+    pub fn build() -> Builder<T> {
+        Builder {
+            phantom: std::marker::PhantomData,
+        }
+    }
+
     /// Creates a new Bloom filter
     ///
     /// Arguments:
-    /// * `fp_prob` - False Positive probability in decimal
-    /// * `length` - Length of the bloom filter
+    /// * `false_positive_probability` - False Positive probability in decimal
     /// * `hash_count` - Number of hash functions to use
-    /// * `bitvec` - Bit vector
+    /// * `number_of_items` - Number of items expected to be stored in filter
+    /// * `length` - Length of the bloom filter in bits
     ///
     pub(crate) fn new(
-        fp_prob: f64,
+        false_positive_probability: f64,
+        hash_count: u32,
+        number_of_items: u64,
+        length: u64,
+    ) -> Self {
+        let bitvec = bitvec!(T, Msb0; 0; length as usize);
+        let length = length as u128;
+
+        Self {
+            false_positive_probability,
+            hash_count,
+            number_of_items,
+            length,
+            bitvec,
+        }
+    }
+
+    /// Creates a new Bloom filter
+    ///
+    /// Arguments:
+    /// * `false_positive_probability` - False Positive probability in decimal
+    /// * `hash_count` - Number of hash functions to use
+    /// * `number_of_items` - Number of items expected to be stored in filter
+    /// * `bitvec` - Bit vector to use
+    ///
+    #[cfg(any(feature = "serde", feature = "hdf5"))]
+    pub(crate) fn new_with_bitvec(
+        false_positive_probability: f64,
         hash_count: u32,
         number_of_items: u64,
         bitvec: BitVec<T, Msb0>,
@@ -60,7 +419,7 @@ where
         let length = bitvec.len() as u128;
 
         Self {
-            fp_prob,
+            false_positive_probability,
             hash_count,
             number_of_items,
             length,
@@ -70,8 +429,8 @@ where
 
     /// Get false positive probability
     ///
-    pub fn fp_prob(&self) -> f64 {
-        self.fp_prob
+    pub fn false_positive_probability(&self) -> f64 {
+        self.false_positive_probability
     }
 
     /// Number of items the filter is designed to hold
@@ -103,54 +462,6 @@ where
     #[allow(clippy::len_without_is_empty)]
     pub fn len(&self) -> usize {
         self.bitvec.len()
-    }
-
-    /// Creates new bloom filter for the given number of items and false positive probability
-    ///
-    /// # Arguments
-    /// * `number_of_item` - Number of items expected to be stored in the bloom filter
-    /// * `fp_prob` - False Positive probability in decimal
-    ///
-    pub fn new_by_item_count_and_fp_prob(
-        number_of_item: u64,
-        fp_prob: f64,
-    ) -> Result<Self, BloomFilterError> {
-        // length of bit array to use
-        let length = Self::calc_length_rounded(number_of_item, fp_prob);
-
-        if length == 0 {
-            return Err(BloomFilterError::LengthZero);
-        }
-
-        // Number of hash functions to use
-        let hash_count = Self::calc_hash_count(length, number_of_item)?;
-
-        // Bit array of given size
-        let bitvec = bitvec!(T, Msb0; 0; length as usize);
-
-        Ok(Self::new(fp_prob, hash_count, number_of_item, bitvec))
-    }
-
-    /// Creates a bloom filter with the given size and false positive probability
-    ///
-    /// # Arguments
-    /// * `length` - Length of the bloom filter in bits
-    /// * `fp_prob` - False Positive probability in decimal
-    ///
-    pub fn new_by_length_and_fp_prob(length: u64, fp_prob: f64) -> Result<Self, BloomFilterError> {
-        let rounded_length = Self::round_to_t(length);
-
-        if rounded_length == 0 {
-            return Err(BloomFilterError::LengthZero);
-        }
-
-        let (number_of_items, hash_count) =
-            Self::calc_item_size_and_hash_count(rounded_length, fp_prob);
-
-        // Bit array of given size
-        let bitvec = bitvec!(T, Msb0; 0; rounded_length as usize);
-
-        Ok(Self::new(fp_prob, hash_count, number_of_items, bitvec))
     }
 
     /// Calculates the strings position within the bitvecotor
@@ -204,102 +515,6 @@ where
         }
         Ok(true)
     }
-
-    /// Calculates the length of the bit array `m` using
-    /// the following formula
-    /// m = ceil((n * log(p)) / log(1 / pow(2, log(2))));
-    ///
-    /// # Arguments
-    ///
-    /// `n` - Number of items expected to be stored in filter
-    /// `p` - False Positive probability in decimal
-    ///
-    pub fn calc_length(n: u64, p: f64) -> u64 {
-        ((n as f64 * p.log(E)) // (n * log(p))
-            /
-            (1.0_f64 / 2.0_f64.powf(2.0_f64.log(E))).log(E))
-        .ceil() as u64
-    }
-
-    /// Calculates the length of the bit array `m` using
-    /// the following formula
-    /// m = ceil((n * log(p)) / log(1 / pow(2, log(2))));
-    ///
-    /// Rounded up to nearest multiple of T
-    ///
-    /// # Arguments
-    ///
-    /// `n` - Number of items expected to be stored in filter
-    /// `p` - False Positive probability in decimal
-    ///
-    pub fn calc_length_rounded(n: u64, p: f64) -> u64 {
-        Self::round_to_t(Self::calc_length(n, p))
-    }
-
-    /// Calculates the number of hash function `k` to apply when checking for an item, using
-    /// following formula
-    /// k = (m/n) * lg(2)
-    ///
-    /// # Arguments
-    ///
-    /// * `m` - Length of bit array
-    /// * `n` - Number of items expected to be stored in filter
-    ///
-    pub fn calc_hash_count(m: u64, n: u64) -> Result<u32, BloomFilterError> {
-        let k = (((m as f64) / (n as f64)) * 2.0_f64.log(E)).round();
-        if k > u32::MAX as f64 {
-            return Err(BloomFilterError::HashCountTooLarge);
-        }
-        Ok(k as u32)
-    }
-
-    /// Calculates the maximum number of items `n` the filter can hold
-    ///
-    /// ceil(m / (-k / log(1 - exp(log(p) / k))))
-    ///
-    /// # Arguments
-    /// * `m` - Length of bit array
-    /// * `k` - Number of hash functions to use
-    /// * `p` - False Positive probability
-    ///
-    pub fn calc_number_of_items(m: u64, k: u32, p: f64) -> u64 {
-        let k_float = k as f64;
-        (m as f64 / (-(k_float) / (1.0_f64 - (p.log(E) / k_float).exp()).log(E))).ceil() as u64
-    }
-
-    /// Calculates item size and hash count
-    /// by increasing the hash_count to fit the maximum possible number of items.
-    ///
-    /// # Arguments
-    /// * `hash_count` - Number of hash functions to use
-    /// * `fp_prob` - False Positive probability in decimal
-    ///
-    pub fn calc_item_size_and_hash_count(size: u64, fp_prob: f64) -> (u64, u32) {
-        let mut number_of_items: u64 = 0;
-        for k in 1..=u32::MAX {
-            let temp_item_size = Self::calc_number_of_items(size, k, fp_prob); // ceil(m / (-k / log(1 - exp(log(p) / k))))
-            if number_of_items > temp_item_size {
-                return (number_of_items, k - 1);
-            } else {
-                number_of_items = temp_item_size;
-            }
-        }
-        (number_of_items, u32::MAX)
-    }
-
-    /// Rounds the given length to the nearest multiple of T (size of the BitStore type in bits)
-    ///
-    /// # Arguments
-    /// * `length` - Length to round
-    ///   
-    pub fn round_to_t(length: u64) -> u64 {
-        let remains = length % (std::mem::size_of::<T>() * 8) as u64;
-        if remains == 0 {
-            length
-        } else {
-            length + (std::mem::size_of::<T>() * 8) as u64 - remains
-        }
-    }
 }
 
 impl<T> BloomFilter<T>
@@ -340,7 +555,7 @@ where
             "BloomFilter(designed for {} items, size {} bytes, false positive probability {}, using {} hash functions)",
             self.number_of_items,
             self.size(),
-            self.fp_prob,
+            self.false_positive_probability,
             self.hash_count
         )
     }
@@ -390,8 +605,10 @@ mod tests {
                 .map(String::from)
                 .collect();
 
-        let mut bloom_filter: BloomFilter<T> =
-            BloomFilter::new_by_item_count_and_fp_prob(some_strings.len() as u64, 0.01).unwrap();
+        let mut bloom_filter = BloomFilter::<T>::build()
+            .with_number_of_items(some_strings.len() as u64)
+            .with_false_positive_probability(0.01)
+            .unwrap();
 
         for a_string in some_strings.iter() {
             bloom_filter
@@ -435,8 +652,10 @@ mod tests {
                 .map(String::from)
                 .collect();
 
-        let bloom_filter: BloomFilter<T> =
-            BloomFilter::new_by_item_count_and_fp_prob(some_strings.len() as u64, 0.01).unwrap();
+        let bloom_filter = BloomFilter::<T>::build()
+            .with_number_of_items(some_strings.len() as u64)
+            .with_false_positive_probability(0.01)
+            .unwrap();
 
         for a_string in some_strings.iter() {
             bloom_filter
@@ -453,40 +672,40 @@ mod tests {
 
     #[test]
     fn test_rounding() {
-        assert_eq!(BloomFilter::<u8>::round_to_t(1), 8);
-        assert_eq!(BloomFilter::<u8>::round_to_t(7), 8);
-        assert_eq!(BloomFilter::<u8>::round_to_t(8), 8);
-        assert_eq!(BloomFilter::<u8>::round_to_t(9), 16);
+        assert_eq!(Builder::<u8>::round_to_t(1), 8);
+        assert_eq!(Builder::<u8>::round_to_t(7), 8);
+        assert_eq!(Builder::<u8>::round_to_t(8), 8);
+        assert_eq!(Builder::<u8>::round_to_t(9), 16);
 
-        assert_eq!(BloomFilter::<u16>::round_to_t(1), 16);
-        assert_eq!(BloomFilter::<u16>::round_to_t(15), 16);
-        assert_eq!(BloomFilter::<u16>::round_to_t(16), 16);
-        assert_eq!(BloomFilter::<u16>::round_to_t(17), 32);
+        assert_eq!(Builder::<u16>::round_to_t(1), 16);
+        assert_eq!(Builder::<u16>::round_to_t(15), 16);
+        assert_eq!(Builder::<u16>::round_to_t(16), 16);
+        assert_eq!(Builder::<u16>::round_to_t(17), 32);
 
-        assert_eq!(BloomFilter::<u32>::round_to_t(1), 32);
-        assert_eq!(BloomFilter::<u32>::round_to_t(31), 32);
-        assert_eq!(BloomFilter::<u32>::round_to_t(32), 32);
-        assert_eq!(BloomFilter::<u32>::round_to_t(33), 64);
+        assert_eq!(Builder::<u32>::round_to_t(1), 32);
+        assert_eq!(Builder::<u32>::round_to_t(31), 32);
+        assert_eq!(Builder::<u32>::round_to_t(32), 32);
+        assert_eq!(Builder::<u32>::round_to_t(33), 64);
 
-        assert_eq!(BloomFilter::<u64>::round_to_t(1), 64);
-        assert_eq!(BloomFilter::<u64>::round_to_t(63), 64);
-        assert_eq!(BloomFilter::<u64>::round_to_t(64), 64);
-        assert_eq!(BloomFilter::<u64>::round_to_t(65), 128);
+        assert_eq!(Builder::<u64>::round_to_t(1), 64);
+        assert_eq!(Builder::<u64>::round_to_t(63), 64);
+        assert_eq!(Builder::<u64>::round_to_t(64), 64);
+        assert_eq!(Builder::<u64>::round_to_t(65), 128);
 
         assert_eq!(
-            BloomFilter::<usize>::round_to_t(1),
+            Builder::<usize>::round_to_t(1),
             std::mem::size_of::<usize>() as u64 * 8
         );
         assert_eq!(
-            BloomFilter::<usize>::round_to_t(63),
+            Builder::<usize>::round_to_t(63),
             std::mem::size_of::<usize>() as u64 * 8
         );
         assert_eq!(
-            BloomFilter::<usize>::round_to_t(64),
+            Builder::<usize>::round_to_t(64),
             std::mem::size_of::<usize>() as u64 * 8
         );
         assert_eq!(
-            BloomFilter::<usize>::round_to_t(65),
+            Builder::<usize>::round_to_t(65),
             std::mem::size_of::<usize>() as u64 * 8 * 2
         );
     }
@@ -494,18 +713,18 @@ mod tests {
     /// Test calculation of length
     #[test]
     fn test_calc_length() {
-        let length = BloomFilter::<u8>::calc_length(80_000_000, 0.001);
-        assert_eq!(length, 1150207006);
+        let length = Builder::<u8>::calc_length(80_000_000, 0.001);
+        assert_eq!(length, 1150207005);
         assert_ne!(length % 8, 0);
 
-        let length_rounded = BloomFilter::<u8>::calc_length_rounded(80_000_000, 0.001);
+        let length_rounded = Builder::<u8>::round_to_t(length);
         assert_eq!(length_rounded % 8, 0)
     }
 
     #[test]
     fn test_calc_hash_count() {
-        let length = BloomFilter::<u8>::calc_length(80_000_000, 0.001);
-        let hash_count = BloomFilter::<u8>::calc_hash_count(length, 80_000_000).unwrap();
+        let length = Builder::<u8>::calc_length(80_000_000, 0.001);
+        let hash_count = Builder::<u8>::calc_hash_count(length, 80_000_000).unwrap();
         assert_eq!(hash_count, 10);
     }
 }

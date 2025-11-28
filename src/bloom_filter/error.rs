@@ -11,6 +11,12 @@ pub enum BloomFilterError {
     HashCountTooLarge,
     #[error("Hash error: {0}")]
     Hashing(std::io::Error),
+    #[error("Number of items is zero")]
+    NumberOfItemsZero,
+    #[error("False positive probability cannot be one")]
+    FalsePositiveProbabilityOne,
+    #[error("False positive probability cannot be zero")]
+    FalsePositiveProbabilityZero,
 }
 
 /// Common error for serialization and deserialization

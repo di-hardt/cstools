@@ -19,7 +19,10 @@ where
         let mut state = serializer.serialize_struct("BloomFilter", 5)?;
         state.serialize_field("type_memory_width", &std::mem::size_of::<T>())?;
         state.serialize_field("hash_count", &self.hash_count())?;
-        state.serialize_field("fp_prob", &self.fp_prob)?;
+        state.serialize_field(
+            "false_positive_probability",
+            &self.false_positive_probability,
+        )?;
         state.serialize_field("number_of_items", &self.number_of_items)?;
         state.serialize_field("bit_array", &self.bitvec)?;
         state.end()
@@ -263,8 +266,10 @@ mod tests {
                 .map(String::from)
                 .collect();
 
-        let mut bloom_filter: BloomFilter<T> =
-            BloomFilter::new_by_item_count_and_fp_prob(some_strings.len() as u64, 0.01).unwrap();
+        let mut bloom_filter = BloomFilter::<T>::build()
+            .with_number_of_items(some_strings.len() as u64)
+            .with_false_positive_probability(0.01)
+            .unwrap();
 
         for a_string in some_strings.iter() {
             bloom_filter
@@ -294,7 +299,9 @@ mod tests {
 
         assert!(bloom_filter.len() == read_bloom_filter.len());
         assert!(bloom_filter.hash_count == read_bloom_filter.hash_count);
-        assert!(bloom_filter.fp_prob == read_bloom_filter.fp_prob);
+        assert!(
+            bloom_filter.false_positive_probability == read_bloom_filter.false_positive_probability
+        );
         assert!(bloom_filter.bitvec == read_bloom_filter.bitvec);
 
         for a_string in some_strings.iter() {
