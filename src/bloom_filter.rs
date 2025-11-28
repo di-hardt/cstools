@@ -710,6 +710,42 @@ mod tests {
         );
     }
 
+    // This takes a long time to run compared to other tests so we just test it for u8
+    #[test]
+    fn test_false_positive_probability_zero() {
+        let some_strings: Vec<String> =
+            read_to_string(PathBuf::from("test_data/10000_random_strings.txt"))
+                .unwrap()
+                .lines()
+                .map(String::from)
+                .collect();
+
+        let mut bloom_filter = BloomFilter::<u8>::build()
+            .with_length(1024_u64.pow(3)) // 1 GiB
+            .with_number_of_items(some_strings.len() as u64)
+            .unwrap();
+
+        assert_eq!(bloom_filter.false_positive_probability(), 0.0);
+
+        for a_string in some_strings[1000..].iter() {
+            bloom_filter
+                .add(&mut Cursor::new(a_string.as_bytes()))
+                .unwrap();
+        }
+
+        for a_string in some_strings[1000..].iter() {
+            assert!(bloom_filter
+                .contains(&mut Cursor::new(a_string.as_bytes()))
+                .unwrap());
+        }
+
+        for a_string in some_strings[..1000].iter() {
+            assert!(!bloom_filter
+                .contains(&mut Cursor::new(a_string.as_bytes()))
+                .unwrap(),);
+        }
+    }
+
     /// Test calculation of length
     #[test]
     fn test_calc_length() {
