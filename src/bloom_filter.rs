@@ -468,15 +468,17 @@ where
     ///
     /// * `item` - Item to add
     ///
-    pub fn add(&mut self, item: &[u8]) -> Result<(), BloomFilterError> {
+    pub fn add(&mut self, item: &[u8]) -> Result<bool, BloomFilterError> {
+        let mut found = true;
         for i in 0..self.hash_count {
             // Create hash for given item.
             // `i` works as seed to mmh3.hash() function
             let digest = self.calc_item_position(item, i);
+            found &= self.bitvec[digest];
             // Set the bit to true
             self.bitvec.set(digest, true)
         }
-        Ok(())
+        Ok(found)
     }
 
     /// Check for existence of the given ixtem in filter
@@ -508,15 +510,17 @@ where
     ///
     /// * `item` - Item to add
     ///
-    pub fn add_aliased(&self, item: &[u8]) -> Result<(), BloomFilterError> {
+    pub fn add_aliased(&self, item: &[u8]) -> Result<bool, BloomFilterError> {
+        let mut found = true;
         for i in 0..self.hash_count {
             // Create hash for given item.
             // `i` works as seed to mmh3.hash() function
             let digest = self.calc_item_position(item, i);
+            found &= self.bitvec[digest];
             // Set the bit to true
             self.bitvec.set_aliased(digest, true)
         }
-        Ok(())
+        Ok(found)
     }
 }
 
@@ -703,6 +707,10 @@ mod tests {
 
         for a_string in some_strings[..1000].iter() {
             assert!(!bloom_filter.contains(a_string.as_bytes()).unwrap(),);
+        }
+
+        for a_string in some_strings[..1000].iter() {
+            assert!(!bloom_filter.add(a_string.as_bytes()).unwrap(),);
         }
     }
 
