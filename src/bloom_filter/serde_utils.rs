@@ -57,7 +57,7 @@ where
 
                     fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
                         formatter.write_str(
-                            "`type_memory_width`, `hash_count`, `false_positive_probability`, `number_of_items`, or `bit_array`",
+                            "`type_memory_width`, `hash_count`, `false_positive_probability`, `number_of_items` or `bit_array`",
                         )
                     }
 
