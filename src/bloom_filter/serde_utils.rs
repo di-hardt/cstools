@@ -17,7 +17,7 @@ where
         S: Serializer,
     {
         let mut state = serializer.serialize_struct("BloomFilter", 5)?;
-        state.serialize_field("type_memory_width", &std::mem::size_of::<T>())?;
+        state.serialize_field("type_memory_width", &(std::mem::size_of::<T>() as u8))?;
         state.serialize_field("hash_count", &self.hash_count())?;
         state.serialize_field(
             "false_positive_probability",
