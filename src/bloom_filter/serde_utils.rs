@@ -223,7 +223,7 @@ where
 mod tests {
     use std::cell::Cell;
     use std::sync::atomic::{AtomicU16, AtomicU32, AtomicU64, AtomicU8, AtomicUsize};
-    use std::{fs::read_to_string, io::Cursor, path::PathBuf};
+    use std::{fs::read_to_string, path::PathBuf};
 
     use super::*;
 
@@ -272,9 +272,7 @@ mod tests {
             .unwrap();
 
         for a_string in some_strings.iter() {
-            bloom_filter
-                .add(&mut Cursor::new(a_string.as_bytes()))
-                .unwrap();
+            bloom_filter.add(a_string.as_bytes()).unwrap();
         }
 
         let temp_file_path = std::env::temp_dir().join("bloom_filter.messagepack");
@@ -305,9 +303,7 @@ mod tests {
         assert!(bloom_filter.bitvec == read_bloom_filter.bitvec);
 
         for a_string in some_strings.iter() {
-            assert!(read_bloom_filter
-                .contains(&mut Cursor::new(a_string.as_bytes()))
-                .unwrap());
+            assert!(read_bloom_filter.contains(a_string.as_bytes()).unwrap());
         }
 
         if temp_file_path.is_file() {

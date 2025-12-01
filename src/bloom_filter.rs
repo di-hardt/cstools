@@ -9,10 +9,10 @@ pub mod hdf5_utils;
 #[cfg(feature = "serde")]
 pub mod serde_utils;
 
-use std::{fmt::Display, io::Read};
+use std::fmt::Display;
 
 use bitvec::prelude::*;
-use murmur3::murmur3_x64_128 as murmur3hash;
+use xxhash_rust::xxh3::xxh3_64_with_seed;
 
 use crate::bloom_filter::error::BloomFilterError;
 
@@ -45,7 +45,7 @@ where
     /// * `n` - Number of items expected to be stored in filter
     /// * `k` - Number of hash functions to use
     ///
-    fn calc_false_positive_prob(m: u64, n: u64, k: u32) -> f64 {
+    fn calc_false_positive_prob(m: u64, n: u64, k: u64) -> f64 {
         let k = k as f64;
         let n = n as f64;
         let m = m as f64;
@@ -62,15 +62,12 @@ where
     /// * `m` - Length of bit array
     /// * `n` - Number of items expected to be stored in filter
     ///
-    fn calc_hash_count(m: u64, n: u64) -> Result<u32, BloomFilterError> {
+    fn calc_hash_count(m: u64, n: u64) -> Result<u64, BloomFilterError> {
         let m = m as f64;
         let n = n as f64;
 
         let k = ((m / n) * 2.0_f64.ln()).round();
-        if k > u32::MAX as f64 {
-            return Err(BloomFilterError::HashCountTooLarge);
-        }
-        Ok(k as u32)
+        Ok(k as u64)
     }
 
     /// Calculates the maximum number of items `n` the filter can hold
@@ -192,7 +189,7 @@ where
             self.false_positive_probability,
             hash_count,
             number_of_items,
-            rounded_length,
+            rounded_length as usize,
         ))
     }
 
@@ -230,7 +227,7 @@ where
             self.false_positive_probability,
             hash_count,
             number_of_items,
-            length,
+            length as usize,
         ))
     }
 }
@@ -291,7 +288,7 @@ where
             false_positive_probability,
             hash_count,
             number_of_items,
-            self.length,
+            self.length as usize,
         ))
     }
 }
@@ -352,14 +349,11 @@ where
     /// False positive probability
     pub(crate) false_positive_probability: f64,
 
-    /// Length of the bloom filter as u128 fosr position calculation
-    pub(crate) length: u128,
-
     /// Number of items the filter is designed to hold
     pub(crate) number_of_items: u64,
 
     /// Number of hash functions to apply
-    pub(crate) hash_count: u32,
+    pub(crate) hash_count: u64,
 
     // Bit vector
     pub(crate) bitvec: BitVec<T, Msb0>,
@@ -381,22 +375,19 @@ where
     /// * `false_positive_probability` - False Positive probability in decimal
     /// * `hash_count` - Number of hash functions to use
     /// * `number_of_items` - Number of items expected to be stored in filter
-    /// * `length` - Length of the bloom filter in bits
     ///
     pub(crate) fn new(
         false_positive_probability: f64,
-        hash_count: u32,
+        hash_count: u64,
         number_of_items: u64,
-        length: u64,
+        length: usize,
     ) -> Self {
-        let bitvec = bitvec!(T, Msb0; 0; length as usize);
-        let length = length as u128;
+        let bitvec = bitvec!(T, Msb0; 0; length);
 
         Self {
             false_positive_probability,
             hash_count,
             number_of_items,
-            length,
             bitvec,
         }
     }
@@ -412,17 +403,14 @@ where
     #[cfg(any(feature = "serde", feature = "hdf5"))]
     pub(crate) fn new_with_bitvec(
         false_positive_probability: f64,
-        hash_count: u32,
+        hash_count: u64,
         number_of_items: u64,
         bitvec: BitVec<T, Msb0>,
     ) -> Self {
-        let length = bitvec.len() as u128;
-
         Self {
             false_positive_probability,
             hash_count,
             number_of_items,
-            length,
             bitvec,
         }
     }
@@ -447,7 +435,7 @@ where
 
     /// Get number of hash functions
     ///
-    pub fn hash_count(&self) -> u32 {
+    pub fn hash_count(&self) -> u64 {
         self.hash_count
     }
 
@@ -470,12 +458,8 @@ where
     /// * `item` - Item to calculate position for
     /// * `seed` - Seed to use for murmur3 hash
     ///
-    fn calc_item_position<I>(&self, item: &mut I, seed: u32) -> Result<usize, BloomFilterError>
-    where
-        I: Read,
-    {
-        let hash = murmur3hash(item, seed).map_err(BloomFilterError::Hashing)?;
-        Ok((hash % self.length) as usize)
+    fn calc_item_position(&self, item: &[u8], seed: u64) -> usize {
+        xxh3_64_with_seed(item, seed) as usize % self.bitvec.len()
     }
 
     /// Add an item to the filter
@@ -484,14 +468,11 @@ where
     ///
     /// * `item` - Item to add
     ///
-    pub fn add<I>(&mut self, item: &mut I) -> Result<(), BloomFilterError>
-    where
-        I: Read,
-    {
+    pub fn add(&mut self, item: &[u8]) -> Result<(), BloomFilterError> {
         for i in 0..self.hash_count {
             // Create hash for given item.
             // `i` works as seed to mmh3.hash() function
-            let digest = self.calc_item_position(item, i)?;
+            let digest = self.calc_item_position(item, i);
             // Set the bit to true
             self.bitvec.set(digest, true)
         }
@@ -503,12 +484,9 @@ where
     /// # Arguments
     /// * `item` - Item to search
     ///
-    pub fn contains<I>(&self, item: &mut I) -> Result<bool, BloomFilterError>
-    where
-        I: Read,
-    {
+    pub fn contains(&self, item: &[u8]) -> Result<bool, BloomFilterError> {
         for i in 0..self.hash_count {
-            let digest = self.calc_item_position(item, i)?;
+            let digest = self.calc_item_position(item, i);
             if !self.bitvec[digest] {
                 return Ok(false);
             }
@@ -530,14 +508,11 @@ where
     ///
     /// * `item` - Item to add
     ///
-    pub fn add_aliased<I>(&self, item: &mut I) -> Result<(), BloomFilterError>
-    where
-        I: Read,
-    {
+    pub fn add_aliased(&self, item: &[u8]) -> Result<(), BloomFilterError> {
         for i in 0..self.hash_count {
             // Create hash for given item.
             // `i` works as seed to mmh3.hash() function
-            let digest = self.calc_item_position(item, i)?;
+            let digest = self.calc_item_position(item, i);
             // Set the bit to true
             self.bitvec.set_aliased(digest, true)
         }
@@ -565,7 +540,6 @@ where
 mod tests {
     use std::cell::Cell;
     use std::fs::read_to_string;
-    use std::io::Cursor;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU16, AtomicU32, AtomicU64, AtomicU8, AtomicUsize};
 
@@ -611,15 +585,11 @@ mod tests {
             .unwrap();
 
         for a_string in some_strings.iter() {
-            bloom_filter
-                .add(&mut Cursor::new(a_string.as_bytes()))
-                .unwrap();
+            bloom_filter.add(a_string.as_bytes()).unwrap();
         }
 
         for a_string in some_strings.iter() {
-            assert!(bloom_filter
-                .contains(&mut Cursor::new(a_string.as_bytes()))
-                .unwrap());
+            assert!(bloom_filter.contains(a_string.as_bytes()).unwrap());
         }
     }
 
@@ -658,15 +628,11 @@ mod tests {
             .unwrap();
 
         for a_string in some_strings.iter() {
-            bloom_filter
-                .add_aliased(&mut Cursor::new(a_string.as_bytes()))
-                .unwrap();
+            bloom_filter.add_aliased(a_string.as_bytes()).unwrap();
         }
 
         for a_string in some_strings.iter() {
-            assert!(bloom_filter
-                .contains(&mut Cursor::new(a_string.as_bytes()))
-                .unwrap());
+            assert!(bloom_filter.contains(a_string.as_bytes()).unwrap());
         }
     }
 
@@ -728,21 +694,15 @@ mod tests {
         assert_eq!(bloom_filter.false_positive_probability(), 0.0);
 
         for a_string in some_strings[1000..].iter() {
-            bloom_filter
-                .add(&mut Cursor::new(a_string.as_bytes()))
-                .unwrap();
+            bloom_filter.add(a_string.as_bytes()).unwrap();
         }
 
         for a_string in some_strings[1000..].iter() {
-            assert!(bloom_filter
-                .contains(&mut Cursor::new(a_string.as_bytes()))
-                .unwrap());
+            assert!(bloom_filter.contains(a_string.as_bytes()).unwrap());
         }
 
         for a_string in some_strings[..1000].iter() {
-            assert!(!bloom_filter
-                .contains(&mut Cursor::new(a_string.as_bytes()))
-                .unwrap(),);
+            assert!(!bloom_filter.contains(a_string.as_bytes()).unwrap(),);
         }
     }
 

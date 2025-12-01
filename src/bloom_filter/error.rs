@@ -7,10 +7,6 @@ use thiserror::Error;
 pub enum BloomFilterError {
     #[error("Length is zero")]
     LengthZero,
-    #[error("Hash count too large (2^32)")]
-    HashCountTooLarge,
-    #[error("Hash error: {0}")]
-    Hashing(std::io::Error),
     #[error("Number of items is zero")]
     NumberOfItemsZero,
     #[error("False positive probability cannot be one")]

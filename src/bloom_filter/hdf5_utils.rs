@@ -111,7 +111,7 @@ where
             )
             .into());
         }
-        let hash_count = file.dataset("hash_count")?.read_scalar::<u32>()?;
+        let hash_count = file.dataset("hash_count")?.read_scalar::<u64>()?;
         let false_positive_probability = file
             .dataset("false_positive_probability")?
             .read_scalar::<f64>()?;
@@ -191,7 +191,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::{fs::read_to_string, io::Cursor, path::PathBuf};
+    use std::{fs::read_to_string, path::PathBuf};
 
     use super::*;
 
@@ -233,9 +233,7 @@ mod tests {
             .unwrap();
 
         for a_string in some_strings.iter() {
-            bloom_filter
-                .add(&mut Cursor::new(a_string.as_bytes()))
-                .unwrap();
+            bloom_filter.add(a_string.as_bytes()).unwrap();
         }
 
         let temp_file = std::env::temp_dir().join("bloom_filter.h5");
@@ -256,9 +254,7 @@ mod tests {
         assert_eq!(bloom_filter.bitvec, read_bloom_filter.bitvec);
 
         for a_string in some_strings.iter() {
-            assert!(read_bloom_filter
-                .contains(&mut Cursor::new(a_string.as_bytes()))
-                .unwrap());
+            assert!(read_bloom_filter.contains(a_string.as_bytes()).unwrap());
         }
 
         if temp_file.is_file() {
