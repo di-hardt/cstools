@@ -127,7 +127,7 @@ where
                 let bit_array = seq
                     .next_element()?
                     .ok_or_else(|| de::Error::invalid_length(4, &self))?;
-                Ok(BloomFilter::new(
+                Ok(BloomFilter::new_with_bitvec(
                     false_positive_probability,
                     hash_count,
                     number_of_items,
@@ -195,7 +195,7 @@ where
                     return Err(de::Error::missing_field("type_memory_width"));
                 }
 
-                Ok(BloomFilter::new(
+                Ok(BloomFilter::new_with_bitvec(
                     false_positive_probability
                         .ok_or_else(|| de::Error::missing_field("false_positive_probability"))?,
                     hash_count.ok_or_else(|| de::Error::missing_field("hash_count"))?,
