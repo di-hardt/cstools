@@ -41,7 +41,7 @@ where
         enum Field {
             TypeMemoryWidth,
             HashCount,
-            FpProb,
+            FalsePositiveProbability,
             NumberOfItems,
             BitArray,
         }
@@ -57,7 +57,7 @@ where
 
                     fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
                         formatter.write_str(
-                            "`type_memory_width`, `hash_count`, `fp_prob`, `number_of_items`, or `bit_array`",
+                            "`type_memory_width`, `hash_count`, `false_positive_probability`, `number_of_items`, or `bit_array`",
                         )
                     }
 
@@ -68,7 +68,7 @@ where
                         match value {
                             "type_memory_width" => Ok(Field::TypeMemoryWidth),
                             "hash_count" => Ok(Field::HashCount),
-                            "fp_prob" => Ok(Field::FpProb),
+                            "false_positive_probability" => Ok(Field::FalsePositiveProbability),
                             "number_of_items" => Ok(Field::NumberOfItems),
                             "bit_array" => Ok(Field::BitArray),
                             _ => Err(de::Error::unknown_field(value, FIELDS)),
@@ -118,7 +118,7 @@ where
                 let hash_count = seq
                     .next_element()?
                     .ok_or_else(|| de::Error::invalid_length(1, &self))?;
-                let fp_prob = seq
+                let false_positive_probability = seq
                     .next_element()?
                     .ok_or_else(|| de::Error::invalid_length(2, &self))?;
                 let number_of_items = seq
@@ -128,7 +128,7 @@ where
                     .next_element()?
                     .ok_or_else(|| de::Error::invalid_length(4, &self))?;
                 Ok(BloomFilter::new(
-                    fp_prob,
+                    false_positive_probability,
                     hash_count,
                     number_of_items,
                     bit_array,
@@ -141,7 +141,7 @@ where
             {
                 let mut type_memory_width: Option<u8> = None;
                 let mut hash_count = None;
-                let mut fp_prob = None;
+                let mut false_positive_probability = None;
                 let mut number_of_items = None;
                 let mut bit_array = None;
                 while let Some(key) = map.next_key()? {
@@ -167,11 +167,13 @@ where
                             hash_count = Some(map.next_value()?);
                         }
 
-                        Field::FpProb => {
-                            if fp_prob.is_some() {
-                                return Err(de::Error::duplicate_field("fp_prob"));
+                        Field::FalsePositiveProbability => {
+                            if false_positive_probability.is_some() {
+                                return Err(de::Error::duplicate_field(
+                                    "false_positive_probability",
+                                ));
                             }
-                            fp_prob = Some(map.next_value()?);
+                            false_positive_probability = Some(map.next_value()?);
                         }
 
                         Field::NumberOfItems => {
@@ -194,7 +196,8 @@ where
                 }
 
                 Ok(BloomFilter::new(
-                    fp_prob.ok_or_else(|| de::Error::missing_field("fp_prob"))?,
+                    false_positive_probability
+                        .ok_or_else(|| de::Error::missing_field("false_positive_probability"))?,
                     hash_count.ok_or_else(|| de::Error::missing_field("hash_count"))?,
                     number_of_items.ok_or_else(|| de::Error::missing_field("number_of_items"))?,
                     bit_array.ok_or_else(|| de::Error::missing_field("bit_array"))?,
@@ -205,7 +208,7 @@ where
         const FIELDS: &[&str] = &[
             "type_memory_width",
             "hash_count",
-            "fp_prob",
+            "false_positive_probability",
             "number_of_items",
             "bit_array",
         ];
